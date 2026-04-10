@@ -1,10 +1,17 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::Ordering;
+use rayon::prelude::*;
 use crate::gc::{GarbageCollector, HeapHandle, Value};
 use omni_compiler::bytecode::{Chunk, CompiledProgram, Instruction};
 
 // ── Call Frame ────────────────────────────────────────────────────────────────
+
+#[derive(Clone, Copy, Debug)]
+enum Handler {
+    Catch(u32),
+    Finally(u32),
+}
 
 /// One activation record on the call stack.
 struct CallFrame {
@@ -17,15 +24,22 @@ struct CallFrame {
     /// The method key (for diagnostics).
     #[allow(dead_code)]
     name: String,
-    /// Active try block handler IPs.
-    catch_blocks: Vec<u32>,
+    /// Active try block handlers (Catch or Finally).
+    handlers: Vec<Handler>,
 }
 
 impl CallFrame {
     fn new(chunk: Chunk, name: String, arg_count: usize) -> Self {
-        // Pre-allocate enough slots (self + params + declared locals).
-        let locals = vec![Value::Null; 256.max(arg_count + 1)];
-        Self { chunk, ip: 0, locals, name, catch_blocks: Vec::new() }
+        // Pre-allocate slots based on compiler's local count calculation and arguments.
+        let size = (chunk.local_count as usize).max(arg_count).max(8);
+        let locals = vec![Value::Null; size];
+        Self { 
+            chunk, 
+            ip: 0, 
+            locals, 
+            name, 
+            handlers: Vec::new() 
+        }
     }
 
     fn read_instr(&mut self) -> Option<&Instruction> {
@@ -37,6 +51,14 @@ impl CallFrame {
 
 // ── VM Error ──────────────────────────────────────────────────────────────────
 
+#[derive(Debug, Clone, Default)]
+enum PendingAction {
+    #[default]
+    None,
+    Return(Value),
+    Throw(Value),
+}
+
 #[derive(Debug)]
 pub enum VmError {
     StackUnderflow,
@@ -46,7 +68,7 @@ pub enum VmError {
     CheckedExceptionUnhandled(String),
     TypeError(String),
     DivisionByZero,
-    NullDereference,
+    NullDereference(String),
 }
 
 // ── Virtual Machine ───────────────────────────────────────────────────────────
@@ -65,6 +87,8 @@ pub struct Vm {
     globals: HashMap<String, Value>,
     /// Currently active exception (if any).
     current_exception: Option<Value>,
+    /// Pending action to resume after finally block (if any).
+    pending_action: PendingAction,
     /// Unique ID for this thread (0 = main).
     pub thread_id: i32,
 }
@@ -78,8 +102,17 @@ impl Vm {
             gc: Arc::new(Mutex::new(GarbageCollector::new())),
             globals: HashMap::new(),
             current_exception: None,
+            pending_action: PendingAction::None,
             thread_id: 0,
         }
+    }
+
+    fn get_stack_trace(&self) -> String {
+        self.frames.iter()
+            .rev()
+            .map(|f| f.name.clone())
+            .collect::<Vec<_>>()
+            .join(" -> ")
     }
 
     // ── Stack helpers ─────────────────────────────────────────────────────
@@ -216,7 +249,8 @@ impl Vm {
                             .unwrap_or(Value::Null);
                         self.push(val);
                     } else {
-                        return Err(VmError::NullDereference);
+                        let stack_trace = self.get_stack_trace();
+                        return Err(VmError::NullDereference(format!("Attempted to load field '{}' from {:?}. Trace: {}", field_name, obj_val, stack_trace)));
                     }
                 }
                 Instruction::StoreField(name_idx) => {
@@ -231,82 +265,68 @@ impl Vm {
                             obj.fields.insert(field_name, new_val);
                         }
                     } else {
-                        return Err(VmError::NullDereference);
+                        let stack_trace = self.get_stack_trace();
+                        return Err(VmError::NullDereference(format!("Attempted to store into field '{}' of {:?}. Trace: {}", field_name, obj_val, stack_trace)));
                     }
                 }
 
-                // ── Arithmetic ────────────────────────────────────────────
-                Instruction::AddInt => {
-                    let (b, a) = (self.pop()?, self.pop()?);
-                    match (a, b) {
+                // Arithmetic instructions are handled below in a unified block
+                Instruction::AddInt | Instruction::AddFloat | Instruction::Add | Instruction::AddStr => {
+                    let b = self.pop()?;
+                    let a = self.pop()?;
+                    match (&a, &b) {
                         (Value::Int(x), Value::Int(y))     => self.push(Value::Int(x + y)),
                         (Value::Float(x), Value::Float(y)) => self.push(Value::Float(x + y)),
-                        (Value::Str(x), Value::Str(y))     => self.push(Value::Str(x + &y)),
-                        _ => return Err(VmError::TypeError("AddInt type mismatch".to_string())),
+                        (Value::Int(x), Value::Float(y))   => self.push(Value::Float(*x as f64 + *y)),
+                        (Value::Float(x), Value::Int(y))   => self.push(Value::Float(*x + *y as f64)),
+                        (Value::Str(x), Value::Str(y))     => self.push(Value::Str(x.clone() + y)),
+                        // String Coercion (Mixed Types)
+                        (Value::Str(x), other)             => self.push(Value::Str(x.clone() + &other.to_string())),
+                        (other, Value::Str(y))             => self.push(Value::Str(other.to_string() + y)),
+                        _ => return Err(VmError::TypeError(format!("Addition type mismatch: cannot add {:?} and {:?}", a, b))),
                     }
                 }
-                Instruction::SubInt => {
-                    let (b, a) = (self.pop()?, self.pop()?);
-                    match (a, b) {
+                Instruction::SubInt | Instruction::SubFloat | Instruction::Sub => {
+                    let b = self.pop()?;
+                    let a = self.pop()?;
+                    match (&a, &b) {
                         (Value::Int(x), Value::Int(y))     => self.push(Value::Int(x - y)),
                         (Value::Float(x), Value::Float(y)) => self.push(Value::Float(x - y)),
-                        _ => return Err(VmError::TypeError("SubInt type mismatch".to_string())),
+                        (Value::Int(x), Value::Float(y))   => self.push(Value::Float(*x as f64 - *y)),
+                        (Value::Float(x), Value::Int(y))   => self.push(Value::Float(*x - *y as f64)),
+                        _ => return Err(VmError::TypeError(format!("Subtraction type mismatch: {:?} - {:?}", a, b))),
                     }
                 }
-                Instruction::MulInt => {
-                    let (b, a) = (self.pop()?, self.pop()?);
-                    match (a, b) {
+                Instruction::MulInt | Instruction::MulFloat | Instruction::Mul => {
+                    let b = self.pop()?;
+                    let a = self.pop()?;
+                    match (&a, &b) {
                         (Value::Int(x), Value::Int(y))     => self.push(Value::Int(x * y)),
                         (Value::Float(x), Value::Float(y)) => self.push(Value::Float(x * y)),
-                        _ => return Err(VmError::TypeError("MulInt type mismatch".to_string())),
+                        (Value::Int(x), Value::Float(y))   => self.push(Value::Float(*x as f64 * *y)),
+                        (Value::Float(x), Value::Int(y))   => self.push(Value::Float(*x * *y as f64)),
+                        _ => return Err(VmError::TypeError(format!("Multiplication type mismatch: {:?} * {:?}", a, b))),
                     }
                 }
-                Instruction::DivInt => {
-                    let (b, a) = (self.pop()?, self.pop()?);
-                    match (a, b) {
-                        (Value::Int(_, ), Value::Int(0))   => return Err(VmError::DivisionByZero),
+                Instruction::DivInt | Instruction::DivFloat | Instruction::Div => {
+                    let b = self.pop()?;
+                    let a = self.pop()?;
+                    match (&a, &b) {
+                        (_, Value::Int(0))                 => return Err(VmError::DivisionByZero),
                         (Value::Int(x), Value::Int(y))     => self.push(Value::Int(x / y)),
                         (Value::Float(x), Value::Float(y)) => self.push(Value::Float(x / y)),
-                        _ => return Err(VmError::TypeError("DivInt type mismatch".to_string())),
+                        (Value::Int(x), Value::Float(y))   => self.push(Value::Float(*x as f64 / *y)),
+                        (Value::Float(x), Value::Int(y))   => self.push(Value::Float(*x / *y as f64)),
+                        _ => return Err(VmError::TypeError(format!("Division type mismatch: {:?} / {:?}", a, b))),
                     }
                 }
-                Instruction::ModInt => {
-                    let (b, a) = (self.pop()?, self.pop()?);
+                Instruction::ModInt | Instruction::Mod => {
+                    let b = self.pop()?;
+                    let a = self.pop()?;
                     match (a, b) {
-                        (Value::Int(_, ), Value::Int(0))   => return Err(VmError::DivisionByZero),
+                        (Value::Int(_), Value::Int(0))   => return Err(VmError::DivisionByZero),
                         (Value::Int(x), Value::Int(y))     => self.push(Value::Int(x % y)),
-                        _ => return Err(VmError::TypeError("ModInt type mismatch".to_string())),
-                    }
-                }
-
-                // For Float-specific ops: treat same as Int variants above.
-                Instruction::AddFloat | Instruction::AddStr => {
-                    let (b, a) = (self.pop()?, self.pop()?);
-                    match (a, b) {
-                        (Value::Float(x), Value::Float(y)) => self.push(Value::Float(x + y)),
-                        (Value::Str(x), Value::Str(y))     => self.push(Value::Str(x + &y)),
-                        _ => return Err(VmError::TypeError("Add type mismatch".to_string())),
-                    }
-                }
-                Instruction::SubFloat => {
-                    let (b, a) = (self.pop()?, self.pop()?);
-                    match (a, b) {
-                        (Value::Float(x), Value::Float(y)) => self.push(Value::Float(x - y)),
-                        _ => return Err(VmError::TypeError("SubFloat type mismatch".to_string())),
-                    }
-                }
-                Instruction::MulFloat => {
-                    let (b, a) = (self.pop()?, self.pop()?);
-                    match (a, b) {
-                        (Value::Float(x), Value::Float(y)) => self.push(Value::Float(x * y)),
-                        _ => return Err(VmError::TypeError("MulFloat type mismatch".to_string())),
-                    }
-                }
-                Instruction::DivFloat => {
-                    let (b, a) = (self.pop()?, self.pop()?);
-                    match (a, b) {
-                        (Value::Float(x), Value::Float(y)) => self.push(Value::Float(x / y)),
-                        _ => return Err(VmError::TypeError("DivFloat type mismatch".to_string())),
+                        _ => return Err(VmError::TypeError("Modulo type mismatch".to_string())),
                     }
                 }
 
@@ -331,28 +351,44 @@ impl Vm {
                     };
                     self.push(Value::Bool(neq));
                 }
-                Instruction::LtInt => {
+                Instruction::LtInt | Instruction::LtFloat | Instruction::Lt => {
                     let (b, a) = (self.pop()?, self.pop()?);
-                    if let (Value::Int(x), Value::Int(y)) = (a, b) {
-                        self.push(Value::Bool(x < y));
+                    match (a, b) {
+                        (Value::Int(x), Value::Int(y))     => self.push(Value::Bool(x < y)),
+                        (Value::Float(x), Value::Float(y)) => self.push(Value::Bool(x < y)),
+                        (Value::Int(x), Value::Float(y))   => self.push(Value::Bool((x as f64) < y)),
+                        (Value::Float(x), Value::Int(y))   => self.push(Value::Bool(x < (y as f64))),
+                        _ => return Err(VmError::TypeError("Lt comparison type mismatch".to_string())),
                     }
                 }
-                Instruction::LtEqInt => {
+                Instruction::LtEqInt | Instruction::LtEqFloat | Instruction::LtEq => {
                     let (b, a) = (self.pop()?, self.pop()?);
-                    if let (Value::Int(x), Value::Int(y)) = (a, b) {
-                        self.push(Value::Bool(x <= y));
+                    match (a, b) {
+                        (Value::Int(x), Value::Int(y))     => self.push(Value::Bool(x <= y)),
+                        (Value::Float(x), Value::Float(y)) => self.push(Value::Bool(x <= y)),
+                        (Value::Int(x), Value::Float(y))   => self.push(Value::Bool((x as f64) <= y)),
+                        (Value::Float(x), Value::Int(y))   => self.push(Value::Bool(x <= (y as f64))),
+                        _ => return Err(VmError::TypeError("LtEq comparison type mismatch".to_string())),
                     }
                 }
-                Instruction::GtInt => {
+                Instruction::GtInt | Instruction::GtFloat | Instruction::Gt => {
                     let (b, a) = (self.pop()?, self.pop()?);
-                    if let (Value::Int(x), Value::Int(y)) = (a, b) {
-                        self.push(Value::Bool(x > y));
+                    match (a, b) {
+                        (Value::Int(x), Value::Int(y))     => self.push(Value::Bool(x > y)),
+                        (Value::Float(x), Value::Float(y)) => self.push(Value::Bool(x > y)),
+                        (Value::Int(x), Value::Float(y))   => self.push(Value::Bool((x as f64) > y)),
+                        (Value::Float(x), Value::Int(y))   => self.push(Value::Bool(x > (y as f64))),
+                        _ => return Err(VmError::TypeError("Gt comparison type mismatch".to_string())),
                     }
                 }
-                Instruction::GtEqInt => {
+                Instruction::GtEqInt | Instruction::GtEqFloat | Instruction::GtEq => {
                     let (b, a) = (self.pop()?, self.pop()?);
-                    if let (Value::Int(x), Value::Int(y)) = (a, b) {
-                        self.push(Value::Bool(x >= y));
+                    match (a, b) {
+                        (Value::Int(x), Value::Int(y))     => self.push(Value::Bool(x >= y)),
+                        (Value::Float(x), Value::Float(y)) => self.push(Value::Bool(x >= y)),
+                        (Value::Int(x), Value::Float(y))   => self.push(Value::Bool((x as f64) >= y)),
+                        (Value::Float(x), Value::Int(y))   => self.push(Value::Bool(x >= (y as f64))),
+                        _ => return Err(VmError::TypeError("GtEq comparison type mismatch".to_string())),
                     }
                 }
                 Instruction::And => {
@@ -436,30 +472,50 @@ impl Vm {
                 }
 
                 Instruction::InvokeVirtual { name_idx, argc } => {
+                    let mut args = Vec::new();
+                    for _ in 0..argc {
+                        args.push(self.pop()?);
+                    }
+                    args.reverse();
+
+                    let receiver = self.pop()?;
                     let frame = self.frames.last().unwrap();
                     let method_name = frame.chunk.names.get(name_idx as usize)
                         .cloned()
                         .unwrap_or_default();
 
-                    let receiver = self.pop()?;
                     if let Value::Object(handle) = &receiver {
                         let class_name = self.gc.lock().unwrap().get(*handle)
                             .map(|obj| obj.class_name.clone())
                             .unwrap_or_default();
-                        let key = format!("{}::{}", class_name, method_name);
-                        if let Some(chunk) = self.program.methods.get(&key).cloned() {
-                            let mut new_frame = CallFrame::new(chunk, key, argc as usize + 1);
-                            new_frame.locals[0] = receiver; // slot 0 = self
-                            for i in (1..=argc as usize).rev() {
-                                new_frame.locals[i] = self.pop()?;
+                        let mut current_class = class_name.clone();
+                        let mut found = false;
+
+                        while !current_class.is_empty() {
+                            let key = format!("{}::{}", current_class, method_name);
+                            if let Some(chunk) = self.program.methods.get(&key).cloned() {
+                                let mut new_frame = CallFrame::new(chunk, key, argc as usize + 1);
+                                new_frame.locals[0] = receiver.clone(); // slot 0 = self
+                                for (i, arg) in args.iter().enumerate() {
+                                    new_frame.locals[i + 1] = arg.clone();
+                                }
+                                self.frames.push(new_frame);
+                                found = true;
+                                break;
                             }
-                            self.frames.push(new_frame);
+                            
+                            // Move to parent class
+                            if let Some(parent) = self.program.inheritance.get(&current_class) {
+                                current_class = parent.clone();
+                            } else {
+                                break;
+                            }
+                        }
+
+                        if found {
+                            // Already handled
                         } else if class_name == "List" {
-                            let mut args = Vec::new();
-                            for _ in 0..argc {
-                                args.push(self.pop()?);
-                            }
-                            args.reverse();
+                            // Use the `args` we already popped
 
                             let mut result = None;
                             let mut err = None;
@@ -500,7 +556,7 @@ impl Vm {
                                             err = Some(VmError::UndefinedMethod("List::size requires 0 arguments".to_string()));
                                         }
                                     }
-                                    _ => err = Some(VmError::UndefinedMethod(key)),
+                                    _ => err = Some(VmError::UndefinedMethod(format!("{}::{}", class_name, method_name))),
                                 }
                             }
 
@@ -511,12 +567,24 @@ impl Vm {
                                 self.push(res);
                             }
                         } else {
-                            return Err(VmError::UndefinedMethod(key));
+                            return Err(VmError::UndefinedMethod(format!("{}::{}", class_name, method_name)));
                         }
+                    } else {
+                        return Err(VmError::NullDereference(format!("Attempted to invoke virtual method '{}' on {:?}", method_name, receiver)));
                     }
                 }
 
                 Instruction::Return => {
+                    let frame = self.frames.last_mut().unwrap();
+                    // Check for finally blocks in the current frame
+                    while let Some(handler) = frame.handlers.pop() {
+                        if let Handler::Finally(ip) = handler {
+                            self.pending_action = PendingAction::Return(Value::Null);
+                            frame.ip = ip as usize;
+                            continue; // We stay in this frame for now
+                        }
+                    }
+                    
                     self.frames.pop();
                     if self.frames.is_empty() {
                         return Ok(Value::Null);
@@ -524,6 +592,17 @@ impl Vm {
                 }
                 Instruction::ReturnValue => {
                     let retval = self.pop()?;
+                    let frame = self.frames.last_mut().unwrap();
+                    
+                    // Check for finally blocks in the current frame
+                    while let Some(handler) = frame.handlers.pop() {
+                        if let Handler::Finally(ip) = handler {
+                            self.pending_action = PendingAction::Return(retval.clone());
+                            frame.ip = ip as usize;
+                            continue; // Value is irrelevant while unwinding
+                        }
+                    }
+
                     self.frames.pop();
                     if self.frames.is_empty() {
                         return Ok(retval);
@@ -542,13 +621,13 @@ impl Vm {
                 }
 
                 Instruction::CallClosure { argc } => {
-                    let closure_val = self.pop()?;
-
                     let mut args = Vec::new();
                     for _ in 0..argc {
                         args.push(self.pop()?);
                     }
                     args.reverse();
+
+                    let closure_val = self.pop()?;
 
                     if let Value::Closure(closure_key, env, base_slot) = closure_val {
                         if let Some(chunk) = self.program.methods.get(&closure_key).cloned() {
@@ -558,8 +637,8 @@ impl Vm {
                                 new_frame.locals[i] = val;
                             }
                             // Callers pass arguments; map them to the corresponding arguments offsets
-                            for (i, arg) in args.into_iter().enumerate() {
-                                new_frame.locals[base_slot as usize + i] = arg;
+                            for (i, arg) in args.iter().enumerate() {
+                                new_frame.locals[base_slot as usize + i] = arg.clone();
                             }
                             self.frames.push(new_frame);
                         } else {
@@ -599,19 +678,147 @@ impl Vm {
                     }
                 }
 
+                // ── Array Operations ──────────────────────────────────────
+                Instruction::NewArray { class_idx, dims } => {
+                    let frame = self.frames.last().unwrap();
+                    let class_name = frame.chunk.names.get(class_idx as usize)
+                        .cloned()
+                        .unwrap_or_default();
+
+                    let mut sizes = Vec::new();
+                    for _ in 0..dims {
+                        if let Value::Int(s) = self.pop()? {
+                            sizes.push(s as usize);
+                        } else {
+                            return Err(VmError::TypeError("Array dimension must be integer".to_string()));
+                        }
+                    }
+                    sizes.reverse(); // Popped in reverse order (dimN...dim1)
+
+                    let total_size: usize = sizes.iter().product();
+                    let handle = {
+                        let mut gc = self.gc.lock().unwrap();
+                        let handle = gc.allocate(&class_name);
+                        let obj = gc.get_mut(handle).unwrap();
+                        obj.elements = Some(vec![Value::Null; total_size]);
+                        obj.dimensions = Some(sizes);
+                        handle
+                    };
+                    
+                    self.push(Value::Object(handle));
+                }
+
+                Instruction::ALoad { dims } => {
+                    let mut indices = Vec::new();
+                    for _ in 0..dims {
+                        if let Value::Int(i) = self.pop()? {
+                            indices.push(i as usize);
+                        } else {
+                            return Err(VmError::TypeError("Array index must be integer".to_string()));
+                        }
+                    }
+                    indices.reverse();
+
+                    let array_val = self.pop()?;
+                    if let Value::Object(handle) = array_val {
+                        let val = {
+                            let gc = self.gc.lock().unwrap();
+                            let obj = gc.get(handle).ok_or(VmError::InvalidHandle(handle))?;
+                            
+                            let dimensions = obj.dimensions.as_ref().ok_or(VmError::TypeError("Not an array".to_string()))?;
+                            let elements = obj.elements.as_ref().unwrap();
+
+                            if indices.len() != dimensions.len() {
+                                return Err(VmError::TypeError(format!("Array dimension mismatch: expected {}, got {}", dimensions.len(), indices.len())));
+                            }
+
+                            let mut flat_index = 0;
+                            let mut stride = 1;
+                            for (item_idx, (&idx, &dim)) in indices.iter().zip(dimensions.iter()).rev().enumerate() {
+                                if idx >= dim {
+                                    return Err(VmError::TypeError(format!("Array index out of bounds: index {} is {} but dimension is {}", indices.len() - 1 - item_idx, idx, dim)));
+                                }
+                                flat_index += idx * stride;
+                                stride *= dim;
+                            }
+
+                            elements[flat_index].clone()
+                        };
+
+                        self.push(val);
+                    } else {
+                        return Err(VmError::NullDereference("Attempted ALoad on null or non-object".to_string()));
+                    }
+                }
+
+                Instruction::AStore { dims } => {
+                    let value = self.pop()?;
+                    let mut indices = Vec::new();
+                    for _ in 0..dims {
+                        if let Value::Int(i) = self.pop()? {
+                            indices.push(i as usize);
+                        } else {
+                            return Err(VmError::TypeError("Array index must be integer".to_string()));
+                        }
+                    }
+                    indices.reverse();
+
+                    let array_val = self.pop()?;
+                    if let Value::Object(handle) = array_val {
+                        let mut gc = self.gc.lock().unwrap();
+                        let obj = gc.get_mut(handle).ok_or(VmError::InvalidHandle(handle))?;
+                        
+                        let dimensions = obj.dimensions.as_ref().ok_or(VmError::TypeError("Not an array".to_string()))?;
+                        let elements = obj.elements.as_mut().unwrap();
+
+                        if indices.len() != dimensions.len() {
+                            return Err(VmError::TypeError(format!("Array dimension mismatch: expected {}, got {}", dimensions.len(), indices.len())));
+                        }
+
+                        let mut flat_index = 0;
+                        let mut stride = 1;
+                        for (item_idx, (&idx, &dim)) in indices.iter().zip(dimensions.iter()).rev().enumerate() {
+                            if idx >= dim {
+                                return Err(VmError::TypeError(format!("Array index out of bounds: index {} is {} but dimension is {}", indices.len() - 1 - item_idx, idx, dim)));
+                            }
+                            flat_index += idx * stride;
+                            stride *= dim;
+                        }
+
+                        elements[flat_index] = value;
+                    } else {
+                        return Err(VmError::NullDereference("Attempted AStore on null or non-object".to_string()));
+                    }
+                }
+
                 // ── Exception Handling ────────────────────────────────────
                 Instruction::Throw => {
                     let exc = self.pop()?;
-                    self.current_exception = Some(exc);
+                    self.current_exception = Some(exc.clone());
                     
-                    while let Some(frame) = self.frames.last_mut() {
-                        if let Some(handler_ip) = frame.catch_blocks.pop() {
-                            frame.ip = handler_ip as usize;
-                            break;
+                    loop {
+                        let frame = match self.frames.last_mut() {
+                            Some(f) => f,
+                            None => break,
+                        };
+                        
+                        if let Some(handler) = frame.handlers.pop() {
+                            match handler {
+                                Handler::Catch(ip) => {
+                                    frame.ip = ip as usize;
+                                    break;
+                                }
+                                Handler::Finally(ip) => {
+                                    self.pending_action = PendingAction::Throw(exc.clone());
+                                    frame.ip = ip as usize;
+                                    break;
+                                }
+                            }
                         } else {
                             self.frames.pop();
                         }
                     }
+
                     if self.frames.is_empty() {
                         let msg = match self.current_exception.as_ref().unwrap() {
                             Value::Object(h) => self.gc.lock().unwrap().get(*h).map(|o| o.class_name.clone()).unwrap_or_default(),
@@ -620,12 +827,15 @@ impl Vm {
                         return Err(VmError::CheckedExceptionUnhandled(msg));
                     }
                 }
-                Instruction::TryBegin { handler_ip } => {
-                    self.frames.last_mut().unwrap().catch_blocks.push(handler_ip);
+                Instruction::TryBeginCatch { handler_ip } => {
+                    self.frames.last_mut().unwrap().handlers.push(Handler::Catch(handler_ip));
+                }
+                Instruction::TryBeginFinally { handler_ip } => {
+                    self.frames.last_mut().unwrap().handlers.push(Handler::Finally(handler_ip));
                 }
                 Instruction::TryEnd { past_ip } => {
                     let frame = self.frames.last_mut().unwrap();
-                    frame.catch_blocks.pop(); // Normal execution passed the protected region
+                    frame.handlers.pop(); 
                     frame.ip = past_ip as usize;
                 }
                 Instruction::CatchMatch { class_idx, local_slot, next_ip } => {
@@ -636,7 +846,6 @@ impl Vm {
                         let is_match = match exc {
                             Value::Object(h) => {
                                 if let Some(obj) = self.gc.lock().unwrap().get(*h) {
-                                    // For prototype, we do exact class matching structure.
                                     obj.class_name == target_class
                                 } else { false }
                             },
@@ -653,24 +862,93 @@ impl Vm {
                     }
                 }
                 Instruction::Rethrow => {
-                    if self.current_exception.is_some() {
-                        // Pop the current frame so we unwind back into caller space
-                        self.frames.pop();
-                        while let Some(frame) = self.frames.last_mut() {
-                            if let Some(handler_ip) = frame.catch_blocks.pop() {
-                                frame.ip = handler_ip as usize;
-                                break;
+                    if let Some(exc) = self.current_exception.clone() {
+                        loop {
+                            let frame = match self.frames.last_mut() {
+                                Some(f) => f,
+                                None => break,
+                            };
+                            
+                            if let Some(handler) = frame.handlers.pop() {
+                                match handler {
+                                    Handler::Catch(ip) => {
+                                        frame.ip = ip as usize;
+                                        break;
+                                    }
+                                    Handler::Finally(ip) => {
+                                        self.pending_action = PendingAction::Throw(exc.clone());
+                                        frame.ip = ip as usize;
+                                        break;
+                                    }
+                                }
                             } else {
                                 self.frames.pop();
                             }
                         }
-                        if self.frames.is_empty() {
-                            let msg = "Rethrow reached top of stack".to_string();
-                            return Err(VmError::CheckedExceptionUnhandled(msg));
+                    }
+                    if self.frames.is_empty() {
+                        let msg = "Rethrow reached top of stack".to_string();
+                        return Err(VmError::CheckedExceptionUnhandled(msg));
+                    }
+                }
+                Instruction::EndFinally => {
+                    match std::mem::take(&mut self.pending_action) {
+                        PendingAction::None => {} // Continue normally
+                        PendingAction::Return(val) => {
+                            // Resume return: check for OUTER finally blocks in SAME frame
+                            let frame = self.frames.last_mut().unwrap();
+                            if let Some(handler) = frame.handlers.pop() {
+                                if let Handler::Finally(ip) = handler {
+                                    self.pending_action = PendingAction::Return(val);
+                                    frame.ip = ip as usize;
+                                }
+                            } else {
+                                // Pop and return
+                                self.frames.pop();
+                                if self.frames.is_empty() {
+                                    return Ok(val);
+                                } else {
+                                    // If we are NOT at the top of the stack, push the return value
+                                    // and continue in the caller.
+                                    self.push(val);
+                                }
+                            }
+                        }
+                        PendingAction::Throw(exc) => {
+                            // Resume throw: search for next handler
+                            self.current_exception = Some(exc.clone());
+                            loop {
+                                let frame = match self.frames.last_mut() {
+                                    Some(f) => f,
+                                    None => break,
+                                };
+                                
+                                if let Some(handler) = frame.handlers.pop() {
+                                    match handler {
+                                        Handler::Catch(ip) => {
+                                            frame.ip = ip as usize;
+                                            break;
+                                        }
+                                        Handler::Finally(ip) => {
+                                            self.pending_action = PendingAction::Throw(exc);
+                                            frame.ip = ip as usize;
+                                            break;
+                                        }
+                                    }
+                                } else {
+                                    self.frames.pop();
+                                }
+                            }
+                            if self.frames.is_empty() {
+                                let msg = match self.current_exception.as_ref().unwrap() {
+                                    Value::Object(h) => self.gc.lock().unwrap().get(*h).map(|o| o.class_name.clone()).unwrap_or_default(),
+                                    o => format!("{:?}", o),
+                                };
+                                return Err(VmError::CheckedExceptionUnhandled(msg));
+                            }
                         }
                     }
                 }
-
                 Instruction::MonitorEnter => {
                     let val = self.pop()?;
                     if let Value::Object(h) = val {
@@ -705,6 +983,23 @@ impl Vm {
                     }
                 }
 
+                Instruction::GetType => {
+                    let val = self.pop()?;
+                    let type_name = match val {
+                        Value::Int(_) => "Int".to_string(),
+                        Value::Float(_) => "Float".to_string(),
+                        Value::Bool(_) => "Bool".to_string(),
+                        Value::Str(_) => "String".to_string(),
+                        Value::Null => "Null".to_string(),
+                        Value::Object(h) => {
+                            let gc = self.gc.lock().unwrap();
+                            gc.get(h).map(|o| o.class_name.clone()).unwrap_or_else(|| "Object".to_string())
+                        }
+                        Value::Closure(_, _, _) => "Closure".to_string(),
+                    };
+                    self.push(Value::Str(type_name));
+                }
+
                 Instruction::ExecuteForall => {
                     let closure_val = self.pop()?;
                     let end_val = self.pop()?;
@@ -714,29 +1009,28 @@ impl Vm {
                         let program = self.program.clone();
                         let shared_gc = self.gc.clone();
                         
-                        std::thread::scope(|s| {
-                            for i in start..end {
-                                let key = key.clone();
-                                let env = env.clone();
-                                let prog = program.clone();
-                                let gc = shared_gc.clone();
-                                let t_id = (i + 1) as i32; // Unique worker ID
-                                
-                                s.spawn(move || {
-                                    let mut worker_vm = Vm::new(prog);
-                                    worker_vm.gc = gc;
-                                    worker_vm.thread_id = t_id;
-                                    
-                                    let chunk = worker_vm.program.methods.get(&key).unwrap().clone();
-                                    let mut frame = CallFrame::new(chunk, key, base as usize + 1);
-                                    for (j, v) in env.into_iter().enumerate() {
-                                        frame.locals[j] = v;
-                                    }
-                                    frame.locals[base as usize] = Value::Int(i);
-                                    worker_vm.frames.push(frame);
-                                    
-                                    let _ = worker_vm.run();
-                                });
+                        // Use rayon's worker pool for high-performance scoped parallelism
+                        (start..=end).into_par_iter().for_each(|i| {
+                            let key = key.clone();
+                            let env = env.clone();
+                            let prog = program.clone();
+                            let gc = shared_gc.clone();
+                            let t_id = (i + 1) as i32; // Unique worker ID
+                            
+                            let mut worker_vm = Vm::new(prog);
+                            worker_vm.gc = gc;
+                            worker_vm.thread_id = t_id;
+                            
+                            let chunk = worker_vm.program.methods.get(&key).expect("Closure method not found").clone();
+                            let mut frame = CallFrame::new(chunk, key, base as usize + 1);
+                            for (j, v) in env.into_iter().enumerate() {
+                                frame.locals[j] = v;
+                            }
+                            frame.locals[base as usize] = Value::Int(i);
+                            worker_vm.frames.push(frame);
+                            
+                            if let Err(e) = worker_vm.run() {
+                                eprintln!("\n[Thread {}] ❌ Parallel worker error: {:?}", t_id, e);
                             }
                         });
                         self.push(Value::Null);

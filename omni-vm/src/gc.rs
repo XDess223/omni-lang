@@ -31,22 +31,40 @@ pub enum Value {
     Closure(String, Vec<Value>, u16),
 }
 
+impl std::fmt::Display for Value {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Value::Int(i) => write!(f, "{}", i),
+            Value::Float(fl) => write!(f, "{}", fl),
+            Value::Bool(b) => write!(f, "{}", b),
+            Value::Str(s) => write!(f, "{}", s),
+            Value::Null => write!(f, "null"),
+            Value::Object(h) => write!(f, "[Object {}]", h),
+            Value::Closure(name, _, _) => write!(f, "[Closure {}]", name),
+        }
+    }
+}
+
 /// A u32 index into the GC's heap arena.
 pub type HeapHandle = u32;
 
-/// A heap-allocated Omni object (class instance).
+/// A heap-allocated Omni object (class instance) or array.
 #[derive(Debug)]
 pub struct HeapObject {
-    /// The class this instance belongs to.
+    /// The class this instance belongs to (or element type for arrays).
     pub class_name: String,
     /// Named fields.
     pub fields: HashMap<String, Value>,
-    /// Native array back-end for List<T>.
+    /// Native array back-end for List<T> or multidimensional arrays.
     pub elements: Option<Vec<Value>>,
+    /// Dimensions for multidimensional arrays.
+    pub dimensions: Option<Vec<usize>>,
     /// GC mark bit — set to `true` during the mark phase, cleared before each cycle.
     pub marked: bool,
     /// Intrinsic lock for monitor blocks. -1 if free, otherwise thread ID of owner.
     pub lock_owner: Arc<AtomicI32>,
+    /// Number of times the current owner has re-entered the lock.
+    pub lock_recursion: Arc<AtomicI32>,
 }
 
 // ── Garbage Collector ─────────────────────────────────────────────────────────
@@ -100,8 +118,10 @@ impl GarbageCollector {
             class_name: class_name.to_string(),
             fields: HashMap::new(),
             elements,
+            dimensions: None,
             marked: false,
             lock_owner: Arc::new(AtomicI32::new(-1)),
+            lock_recursion: Arc::new(AtomicI32::new(0)),
         };
 
         if let Some(slot) = self.free_list.pop() {

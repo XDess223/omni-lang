@@ -1,0 +1,65 @@
+// ==========================================
+//   OMNI STANDARD LIBRARY (stdlib.omni)
+// ==========================================
+
+class List<T> {
+    private var _size : Int = 0;
+    
+    public function size() : Int { return _size; }
+    
+    public function add(in item : T) {
+        // VM intrinsic would handle internal array growth
+        _size = _size + 1;
+    }
+    
+    public function get(in index : Int) : T ? {
+        // VM intrinsic would return the actual element
+        return null;
+    }
+    
+    public function clear() {
+        _size = 0;
+    }
+}
+
+class Exception {
+    private var message : String;
+    
+    public Exception(in msg : String) {
+        message = msg;
+    }
+    
+    public function getMessage() : String {
+        return message;
+    }
+    
+    public function getType() : String {
+        return "Exception";
+    }
+}
+
+class ConcurrentException extends Exception {
+    public ConcurrentException(in msg : String) {
+        super(msg);
+    }
+    
+    public function getType() : String {
+        return "ConcurrentException";
+    }
+}
+
+class NullPointerException extends Exception {
+    public NullPointerException() {
+        super("Accessing a null reference.");
+    }
+}
+
+class System {
+    public function log(in msg : String) {
+        print("[SYSTEM] " + msg);
+    }
+    
+    public function getTime() : Float {
+        return 1625097600.0; // Mocked timestamp
+    }
+}

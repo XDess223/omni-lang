@@ -35,12 +35,14 @@ pub enum Instruction {
     /// Store into a field: (value, object) → object.field = value
     StoreField(u32),
 
-    // ── Arithmetic / Logic (binary — pop two, push one) ───────────────────
-    AddInt, SubInt, MulInt, DivInt, ModInt,
+    Add, Sub, Mul, Div, Mod,   // Generic arithmetic
+    AddInt, SubInt, MulInt, DivInt, ModInt, // Specialized for performance (optional)
     AddFloat, SubFloat, MulFloat, DivFloat,
     AddStr,                // string concatenation
     Eq, NotEq,
+    Lt, LtEq, Gt, GtEq,     // Generic comparisons
     LtInt, LtEqInt, GtInt, GtEqInt,
+    LtFloat, LtEqFloat, GtFloat, GtEqFloat,
     And, Or, Not,
 
     // ── Control Flow ─────────────────────────────────────────────────────
@@ -69,11 +71,20 @@ pub enum Instruction {
     /// Create a closure binding the current local frame environment to the target anonymous method.
     MakeClosure { name_idx: u32, base_slot: u16 },
 
+    // ── Array Operations ────────────────────────────────────────────────
+    /// Allocate a new array. Pops `dims` size values from stack.
+    NewArray { class_idx: u32, dims: u32 },
+    /// Load from an array: pops `dims` indices, then `array` ref.
+    ALoad { dims: u32 },
+    /// Store to an array: pops `value`, then `dims` indices, then `array` ref.
+    AStore { dims: u32 },
+
     // ── Exception Handling ────────────────────────────────────────────────
-    /// Mark the beginning of a protected try region.
-    /// `handler_ip` = instruction index of the first catch/finally block.
-    TryBegin { handler_ip: u32 },
-    /// End the try region (normal path — jump past all catch blocks).
+    /// Mark the beginning of a protected try region with a catch handler.
+    TryBeginCatch { handler_ip: u32 },
+    /// Mark the beginning of a protected region with a finally handler.
+    TryBeginFinally { handler_ip: u32 },
+    /// End the try region (normal path — jump past handlers).
     TryEnd { past_ip: u32 },
     /// Check the top-of-stack exception against a class name.
     /// If it matches, bind to a local slot and continue; else jump to next_ip.
@@ -82,6 +93,8 @@ pub enum Instruction {
     Rethrow,
     /// Throw the exception at the top of the stack.
     Throw,
+    /// Signifies the end of a finally block; resumes pending return/exception.
+    EndFinally,
 
     // ── Concurrency (Parallelism & Monitors) ─────────────────────────────
     /// Acquire the monitor lock on the object at top-of-stack.
@@ -93,6 +106,8 @@ pub enum Instruction {
     ExecuteForall,
 
     // ── Misc ──────────────────────────────────────────────────────────────
+    /// Push high-performance reflection metadata (the type name) onto the stack.
+    GetType,
     /// No-operation (used for patching jump targets during code generation).
     Nop,
     /// Halt execution (end of main program).
@@ -114,11 +129,16 @@ pub struct Chunk {
     pub names: Vec<String>,
     /// Source-line map: code[i] was generated from source line map[i].
     pub line_map: Vec<u32>,
+    /// Total number of local variable slots required.
+    pub local_count: u16,
 }
 
 impl Chunk {
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            local_count: 0,
+            ..Self::default()
+        }
     }
 
     /// Emit a single instruction and return its index.
@@ -157,7 +177,8 @@ impl Chunk {
             Instruction::Jump(ip)        => *ip = target,
             Instruction::JumpIfFalse(ip) => *ip = target,
             Instruction::JumpIfTrue(ip)  => *ip = target,
-            Instruction::TryBegin { handler_ip } => *handler_ip = target,
+            Instruction::TryBeginCatch { handler_ip } => *handler_ip = target,
+            Instruction::TryBeginFinally { handler_ip } => *handler_ip = target,
             Instruction::TryEnd { past_ip }      => *past_ip = target,
             Instruction::CatchMatch { next_ip, .. } => *next_ip = target,
             _ => {}
@@ -175,6 +196,8 @@ impl Chunk {
 pub struct CompiledProgram {
     /// One chunk per method (keyed as "ClassName::method_name").
     pub methods: std::collections::HashMap<String, Chunk>,
+    /// Inheritance map: child class -> parent class.
+    pub inheritance: std::collections::HashMap<String, String>,
     /// A special top-level chunk for static initializers / main entry.
     pub main_chunk: Chunk,
 }

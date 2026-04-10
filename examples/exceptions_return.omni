@@ -1,0 +1,19 @@
+class Main {
+    public function main() {
+        print("--- Testing Return from Try ---");
+        
+        // Using a closure to test return-from-try logic safely
+        var testReturn = method() {
+            try {
+                print("[Try] Returning 42...");
+                return 42;
+            } finally {
+                print("[Finally] Intercepted return! Cleaning up...");
+            }
+        };
+
+        var result = testReturn();
+        print("Final result: " + result);
+        print("--- Return Test Done ---");
+    }
+}

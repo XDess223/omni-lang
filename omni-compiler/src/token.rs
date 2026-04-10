@@ -45,6 +45,12 @@ pub enum Token {
     True,
     False,
     Null,       // Only allowed via Optional types (String?)
+    Method,     // First-class function keyword
+    This,
+    Super,
+    Switch,
+    Case,
+    Default,
 
     // ── Types ─────────────────────────────────────────────────
     TypeInt,
@@ -69,6 +75,7 @@ pub enum Token {
     Not,        // !
     Assign,     // =
     Arrow,      // ->
+    DoubleArrow, // =>
 
     // ── Punctuation ───────────────────────────────────────────
     Semicolon,
@@ -81,6 +88,8 @@ pub enum Token {
     RParen,
     LBrace,
     RBrace,
+    LBracket,   // [
+    RBracket,   // ]
     LAngle,     // < for generics
     RAngle,     // > for generics
 

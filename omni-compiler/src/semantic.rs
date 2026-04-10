@@ -49,6 +49,8 @@ pub struct Analyzer {
     current_method_throws: Vec<String>,
     /// Names of `in`-mode parameters in the current method scope.
     in_mode_params: Vec<String>,
+    current_class: Option<String>,
+    current_parent: Option<String>,
 }
 
 impl Analyzer {
@@ -59,6 +61,8 @@ impl Analyzer {
             caught_exceptions: Vec::new(),
             current_method_throws: Vec::new(),
             in_mode_params: Vec::new(),
+            current_class: None,
+            current_parent: None,
         }
     }
 
@@ -129,6 +133,9 @@ impl Analyzer {
     // ── Class analysis ────────────────────────────────────────────────────
 
     fn analyze_class(&mut self, class: &ClassDef) {
+        self.current_class = Some(class.name.clone());
+        self.current_parent = class.extends.clone();
+
         // Verify super-class is declared (if any).
         if let Some(ref parent) = class.extends {
             if !self.table.is_declared(parent) {
@@ -172,6 +179,8 @@ impl Analyzer {
         }
 
         self.table.pop_scope();
+        self.current_class = None;
+        self.current_parent = None;
     }
 
     // ── Method analysis ───────────────────────────────────────────────────
@@ -293,6 +302,23 @@ impl Analyzer {
                 for s in body { self.analyze_stmt(s); }
             }
 
+            Stmt::Switch { condition, cases, default_case } => {
+                let cond_ty = self.analyze_expr(condition);
+                for case in cases {
+                    let val_ty = self.analyze_expr(&case.value);
+                    if !cond_ty.is_compatible_with(&val_ty) && cond_ty != OmniType::Inferred && val_ty != OmniType::Inferred {
+                        self.errors.push(SemanticError::TypeMismatch {
+                            expected: cond_ty.to_string(),
+                            found: val_ty.to_string(),
+                        });
+                    }
+                    self.analyze_block(&case.body);
+                }
+                if let Some(df) = default_case {
+                    self.analyze_block(df);
+                }
+            }
+
             Stmt::TryCatch { try_block, catches, finally_block } => {
                 // Push the set of exception types this try-catch handles.
                 let caught: Vec<String> =
@@ -379,6 +405,22 @@ impl Analyzer {
                     OmniType::Inferred
                 }
             }
+            Expr::This => {
+                if let Some(ref class_name) = self.current_class {
+                    OmniType::from_name(class_name, vec![], false)
+                } else {
+                    // Logic error or top-level 'this' (not supported)
+                    OmniType::Inferred
+                }
+            }
+            Expr::Super => {
+                if let Some(ref parent_name) = self.current_parent {
+                    OmniType::from_name(parent_name, vec![], false)
+                } else {
+                    // Logic error or 'super' in a class without parent
+                    OmniType::Inferred
+                }
+            }
 
             Expr::FieldAccess { object, field } => {
                 self.analyze_expr(object);
@@ -431,16 +473,47 @@ impl Analyzer {
                     }
                 }
 
-                for arg in args { self.analyze_expr(arg); }
+                for arg in args { self.analyze_expr(&arg.value); }
                 OmniType::Inferred
             }
 
-            Expr::New { class_name, type_args: _, args } => {
+            Expr::ArrayAccess { array, indices } => {
+                let _arr_ty = self.analyze_expr(array);
+                for idx in indices {
+                    let ty = self.analyze_expr(idx);
+                    if ty != OmniType::Int && ty != OmniType::Inferred {
+                        self.errors.push(SemanticError::TypeMismatch {
+                            expected: "Int".to_string(),
+                            found: ty.to_string(),
+                        });
+                    }
+                }
+                OmniType::Inferred
+            }
+
+            Expr::ArrayAlloc { element_type, sizes } => {
+                let el_ty = self.resolve_type_expr(element_type);
+                for size in sizes {
+                    let ty = self.analyze_expr(size);
+                    if ty != OmniType::Int && ty != OmniType::Inferred {
+                        self.errors.push(SemanticError::TypeMismatch {
+                            expected: "Int".to_string(),
+                            found: ty.to_string(),
+                        });
+                    }
+                }
+                OmniType::Array { element_type: Box::new(el_ty), dimensions: sizes.len() }
+            }
+
+            Expr::New { class_name, type_args, args } => {
                 if class_name != "List" && !self.table.is_declared(class_name) {
                     self.errors.push(SemanticError::Undeclared(class_name.clone()));
                 }
-                for arg in args { self.analyze_expr(arg); }
-                OmniType::Class(class_name.clone())
+                for arg in args { self.analyze_expr(&arg.value); }
+                let resolved_args: Vec<OmniType> = type_args.iter()
+                    .map(|ta| self.resolve_type_expr(ta))
+                    .collect();
+                OmniType::from_name(class_name, resolved_args, false)
             }
 
             Expr::BinOp { op, left, right } => {
@@ -527,6 +600,18 @@ impl Analyzer {
                     OmniType::Optional(Box::new(func_ty))
                 } else {
                     func_ty
+                }
+            }
+            TypeExpr::Array { element_type, dimensions, optional } => {
+                let el_ty = self.resolve_type_expr(element_type);
+                let arr_ty = OmniType::Array {
+                    element_type: Box::new(el_ty),
+                    dimensions: *dimensions as usize,
+                };
+                if *optional {
+                    OmniType::Optional(Box::new(arr_ty))
+                } else {
+                    arr_ty
                 }
             }
         }

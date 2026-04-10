@@ -92,7 +92,7 @@ mod tests {
             "Missing ExecuteForall instruction");
     }
 
-    /// Verify try-catch emits TryBegin / TryEnd instructions.
+    /// Verify try-catch emits TryBeginCatch / TryEnd instructions.
     #[test]
     fn test_codegen_try_catch_instructions() {
         use omni_compiler::codegen::CodeGen;
@@ -113,8 +113,8 @@ mod tests {
         gen.generate(&program);
 
         let chunk = gen.output.methods.get("Safe::run").expect("chunk missing");
-        assert!(chunk.code.iter().any(|i| matches!(i, Instruction::TryBegin { .. })),
-            "Missing TryBegin");
+        assert!(chunk.code.iter().any(|i| matches!(i, Instruction::TryBeginCatch { .. })),
+            "Missing TryBeginCatch");
         assert!(chunk.code.iter().any(|i| matches!(i, Instruction::TryEnd { .. })),
             "Missing TryEnd");
     }

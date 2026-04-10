@@ -117,8 +117,16 @@ pub enum Stmt {
     Throw(Expr),
     /// monitor (<expr>) <block> — mutual exclusion
     Monitor { target: Expr, body: Block },
+    /// switch (<expr>) { {case <expr>: <block>} [default: <block>] }
+    Switch { condition: Expr, cases: Vec<SwitchCase>, default_case: Option<Block> },
     /// A bare expression statement: method calls, etc.
     ExprStmt(Expr),
+}
+
+#[derive(Debug, Clone)]
+pub struct SwitchCase {
+    pub value: Expr,
+    pub body: Block,
 }
 
 /// Variable / field declaration.
@@ -150,15 +158,23 @@ pub enum Expr {
 
     /// A variable or parameter reference.
     Ident(String),
+    This,
+    Super,
 
     /// object.field or object.method(...)
     FieldAccess { object: Box<Expr>, field: String },
 
     /// method_name(arg1, arg2, ...)  — also handles keyword args
-    Call { callee: Box<Expr>, args: Vec<Expr> },
+    Call { callee: Box<Expr>, args: Vec<Arg> },
 
     /// new ClassName<T1, T2>(args)
-    New { class_name: String, type_args: Vec<TypeExpr>, args: Vec<Expr> },
+    New { class_name: String, type_args: Vec<TypeExpr>, args: Vec<Arg> },
+
+    /// Array access: arr[i, j, k]
+    ArrayAccess { array: Box<Expr>, indices: Vec<Expr> },
+
+    /// Array allocation: new Type[s1, s2]
+    ArrayAlloc { element_type: TypeExpr, sizes: Vec<Expr> },
 
     /// Binary operation: left OP right
     BinOp { op: BinOp, left: Box<Expr>, right: Box<Expr> },
@@ -168,6 +184,12 @@ pub enum Expr {
 
     /// Closure / anonymous function: function(params) { body }
     Closure { params: Vec<Param>, body: Block },
+}
+
+#[derive(Debug, Clone)]
+pub struct Arg {
+    pub name: Option<String>,
+    pub value: Expr,
 }
 
 #[derive(Debug, Clone)]
@@ -196,6 +218,11 @@ pub enum TypeExpr {
         params: Vec<TypeExpr>,
         return_type: Box<TypeExpr>,
         optional: bool,
+    },
+    Array {
+        element_type: Box<TypeExpr>,
+        dimensions: u32,
+        optional: bool,
     }
 }
 
@@ -204,6 +231,7 @@ impl TypeExpr {
         match self {
             TypeExpr::Named { optional, .. } => *optional,
             TypeExpr::Function { optional, .. } => *optional,
+            TypeExpr::Array { optional, .. } => *optional,
         }
     }
 }

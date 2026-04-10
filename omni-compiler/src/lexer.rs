@@ -170,12 +170,18 @@ impl Lexer {
             "monitor"    => Token::Monitor,
             "import"     => Token::Import,
             "namespace"  => Token::Namespace,
+            "method"     => Token::Method,
             "public"     => Token::Public,
             "private"    => Token::Private,
             "protected"  => Token::Protected,
+            "this"       => Token::This,
+            "super"      => Token::Super,
             "true"       => Token::BoolLiteral(true),
             "false"      => Token::BoolLiteral(false),
             "null"       => Token::Null,
+            "switch"     => Token::Switch,
+            "case"       => Token::Case,
+            "default"    => Token::Default,
             // Built-in types
             "Int"        => Token::TypeInt,
             "Float"      => Token::TypeFloat,
@@ -232,6 +238,7 @@ impl Lexer {
                 '/' => Token::Slash,
                 '%' => Token::Percent,
                 '=' if self.current() == Some('=') => { self.advance(); Token::Eq }
+                '=' if self.current() == Some('>') => { self.advance(); Token::DoubleArrow }
                 '=' => Token::Assign,
                 '!' if self.current() == Some('=') => { self.advance(); Token::NotEq }
                 '!' => Token::Not,
@@ -251,6 +258,8 @@ impl Lexer {
                 ')' => Token::RParen,
                 '{' => Token::LBrace,
                 '}' => Token::RBrace,
+                '[' => Token::LBracket,
+                ']' => Token::RBracket,
 
                 unexpected => return Err(LexError::UnexpectedChar(unexpected, span)),
             };

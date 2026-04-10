@@ -1,0 +1,115 @@
+import "examples/stdlib.omni";
+
+namespace Performance::Math;
+
+class Matrix {
+    private var data : Float[,,];
+    private var rows : Int;
+    private var cols : Int;
+
+    public Matrix(rows: Int, cols: Int) {
+        this.rows = rows;
+        this.cols = cols;
+        // Multidimensional array allocation
+        this.data = new Float[rows, cols];
+    }
+
+    public function set(r: Int, c: Int, val: Float) {
+        // Multidimensional array store
+        this.data[r, c] = val;
+    }
+
+    public function get(r: Int, c: Int) : Float {
+        // Multidimensional array load
+        return this.data[r, c];
+    }
+    
+    public function printMatrix() {
+        print("Matrix Output [" + this.rows + "x" + this.cols + "]:");
+        forall (i = 0 to this.rows - 1) {
+            // Sequential row printing for clarity (nested forall works, but print contention is high)
+            var row = "| ";
+            // Using indices directly for aggregation
+            var col0 = this.get(i, 0);
+            var col1 = this.get(i, 1);
+            var col2 = this.get(i, 2);
+            print("| " + col0 + " | " + col1 + " | " + col2 + " |");
+        }
+    }
+}
+
+class Computer {
+    private var status : String;
+    
+    public Computer(in s: String) {
+        status = s;
+    }
+
+    public function runDiagnostic(mode: Int, target: Matrix) {
+        print("Computer[" + this.status + "] starting diagnostic mode: " + mode);
+        
+        // Switch statement (No fall-through)
+        switch (mode) {
+            case 1: {
+                print("Diagnostic Result: INITIALIZING ARRAY");
+                // Nested Parallelism (Forall)
+                forall (i = 0 to 2) {
+                    forall (j = 0 to 2) {
+                        target.set(i, j, (i + j) * 1.1);
+                    }
+                }
+            }
+            case 2: {
+                print("Diagnostic Result: SCALING VALUES");
+                forall (i = 0 to 2) {
+                    forall (j = 0 to 2) {
+                        var val = target.get(i, j);
+                        target.set(i, j, val * 2.0);
+                    }
+                }
+            }
+            default: {
+                print("Diagnostic Result: UNKNOWN MODE - NOP");
+            }
+        }
+    }
+}
+
+class Main {
+    public function main() {
+        print("==========================================");
+        print("   OMNI ULTIMATE LANGUAGE PROOF (V2)     ");
+        print("==========================================");
+
+        // 1. Keyword Parameters in 'New' and 'Call'
+        var m = new Matrix(rows: 3, cols: 3);
+        var comp = new Computer(s: "OMNI-X1");
+
+        // 2. Multidimensional Array Access & Switch
+        try {
+            print("Action: Running init...");
+            comp.runDiagnostic(mode: 1, target: m);
+            m.printMatrix();
+
+            print("Action: Running scale...");
+            comp.runDiagnostic(mode: 2, target: m);
+        
+            var v11 = m.get(1, 1);
+            print("Verification - Item at (1,1): ", v11);
+
+            m.printMatrix();
+        } catch (Exception e) {
+            print("Fatal Error: " + e.getMessage());
+        }
+
+        // 3. Optional Chaining (Theoretical Showcase)
+        var maybeMsg : String? = "Finalizing...";
+        if (maybeMsg != null) {
+            print(maybeMsg);
+        }
+
+        print("==========================================");
+        print("   PROOF COMPLETED SUCCESSFULLY          ");
+        print("==========================================");
+    }
+}

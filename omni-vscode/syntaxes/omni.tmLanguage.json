@@ -1,0 +1,88 @@
+{
+    "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+    "name": "Omni",
+    "patterns": [
+        {
+            "include": "#comments"
+        },
+        {
+            "include": "#keywords"
+        },
+        {
+            "include": "#strings"
+        },
+        {
+            "include": "#constants"
+        },
+        {
+            "include": "#types"
+        }
+    ],
+    "repository": {
+        "comments": {
+            "patterns": [
+                {
+                    "name": "comment.line.double-slash.omni",
+                    "begin": "//",
+                    "end": "$"
+                }
+            ]
+        },
+        "keywords": {
+            "patterns": [
+                {
+                    "name": "keyword.control.omni",
+                    "match": "\\b(if|else|foreach|forall|monitor|try|catch|finally|throw|return|switch|case|default|import|namespace|throws|this|super)\\b"
+                },
+                {
+                    "name": "keyword.other.omni",
+                    "match": "\\b(class|function|method|var|in|new|public|private|protected|interface|implements|extends)\\b"
+                },
+                {
+                    "name": "keyword.operator.omni",
+                    "match": "(=>|==|!=|<=|>=|\\+|-|\\*|/|%|=|&&|\\|\\||!|<|>)"
+                },
+                {
+                    "name": "support.function.omni",
+                    "match": "\\b(print|size|add|get|log)\\b"
+                }
+            ]
+        },
+        "strings": {
+            "name": "string.quoted.double.omni",
+            "begin": "\"",
+            "end": "\"",
+            "patterns": [
+                {
+                    "name": "constant.character.escape.omni",
+                    "match": "\\\\."
+                }
+            ]
+        },
+        "constants": {
+            "patterns": [
+                {
+                    "name": "constant.numeric.omni",
+                    "match": "\\b[0-9]+(\\.[0-9]+)?\\b"
+                },
+                {
+                    "name": "constant.language.omni",
+                    "match": "\\b(true|false|null)\\b"
+                }
+            ]
+        },
+        "types": {
+            "patterns": [
+                {
+                    "name": "entity.name.type.omni",
+                    "match": "\\b[A-Z][a-zA-Z0-9]*\\b"
+                },
+                {
+                    "name": "storage.type.primitive.omni",
+                    "match": "\\b(Int|Float|String|Bool|List|Exception)\\b"
+                }
+            ]
+        }
+    },
+    "scopeName": "source.omni"
+}

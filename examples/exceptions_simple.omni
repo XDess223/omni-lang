@@ -1,0 +1,23 @@
+// Defined a base Exception class since the language is currently bare-bones
+class Exception {
+    public var message: String;
+    public function Exception(msg: String) {
+        this.message = msg;
+    }
+}
+
+class Main {
+    public function main() {
+        print("--- Testing Simple Exceptions ---");
+        try {
+            print("[Try] Throwing Exception...");
+            throw new Exception("Test Error");
+            print("[Try] This should not print");
+        } catch (Exception e) {
+            print("[Catch] Caught: " + e.message);
+        } finally {
+            print("[Finally] Executing cleanup.");
+        }
+        print("--- Simple Exceptions Done ---");
+    }
+}

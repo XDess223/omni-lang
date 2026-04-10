@@ -1,0 +1,120 @@
+import "examples/stdlib.omni";
+
+namespace System::Analysis;
+
+// --- Interfaces & Generics ---
+interface ITask<T> {
+    function process(in input : T) : T throws Exception;
+}
+
+// --- Base Class & Inheritance ---
+class Base {
+    protected var id : Int;
+    public Base(in val : Int) {
+        id = val;
+    }
+    public function log(in msg : String) {
+        print("[" + id + "] " + msg);
+    }
+}
+
+// --- Advanced Monitor (Thread-Safe Shared State) ---
+class Statistics {
+    private var count : Int;
+    private var logList : List<String>;
+
+    public Statistics() {
+        count = 0;
+        logList = new List<String>();
+    }
+    public function increment() {
+        monitor (this) {
+            count = count + 1;
+        }
+    }
+
+    public function getCount() : Int {
+        monitor (this) {
+            return count;
+        }
+    }
+
+    public function addLog(in s : String) {
+        monitor (this) {
+            logList.add(s);
+        }
+    }
+}
+
+// --- Complex Class: Generics + Inheritance + Interfaces ---
+class LogicEngine<T> extends Base implements ITask {
+    private var stats : Statistics;
+    private var factor : Int;
+
+    public LogicEngine(in id : Int, in f : Int, in s : Statistics) {
+        super(id);
+        factor = f;
+        stats = s;
+    }
+
+    // Implementation of ITask
+    public function process(in val : T) : T throws Exception {
+        if (val == null) {
+            throw new Exception("Null input provided to LogicEngine");
+        }
+        
+        stats.increment();
+        return val;
+    }
+
+    public function runParallel(data : List<T>) {
+        this.log("Starting high-performance parallel segment...");
+        
+        // FORALL: Statement-level parallelism
+        forall (i = 0 to data.size()) {
+            // Note: In a real stdlib, 'data.get(i)' would return the actual item
+            var item = data.get(i);
+            try {
+                this.process(item);
+                this.log("Processed iteration " + i);
+            } catch (Exception e) {
+                this.log("Error processing batch: " + e.getMessage());
+            } finally {
+                stats.addLog("Finished iteration " + i);
+            }
+        }
+    }
+}
+
+// --- Entry Point inside Class Main ---
+class Main {
+    public function main() {
+        print("==========================================");
+        print("   OMNI LANGUAGE COMPREHENSIVE PROOF     ");
+        print("==========================================");
+
+        var globalStats = new Statistics();
+        var engine = new LogicEngine<Int>(101, 5, globalStats);
+
+        var numbers = new List<Int>();
+        numbers.add(10);
+        numbers.add(20);
+        numbers.add(30);
+        numbers.add(40);
+
+        print("Running system diagnostics...");
+        print("Engine Type: " + engine.getType());
+        print("Stats Type: " + globalStats.getType());
+
+        try {
+            engine.runParallel(numbers);
+            print("Parallel execution finished.");
+        } catch (Exception e) {
+            print("Fatal system error: " + e.getMessage());
+        } finally {
+            print("Final Statistics -> Count: " + globalStats.getCount());
+            print("Terminating Omni execution...");
+            print("==========================================");
+        }
+    }
+}

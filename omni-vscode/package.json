@@ -1,0 +1,35 @@
+{
+    "name": "omni-lang",
+    "displayName": "Omni Language",
+    "description": "Syntax highlighting and language support for the Omni Programming Language.",
+    "version": "1.0.0",
+    "publisher": "XDess223",
+    "engines": {
+        "vscode": "^1.75.0"
+    },
+    "categories": [
+        "Programming Languages"
+    ],
+    "contributes": {
+        "languages": [
+            {
+                "id": "omni",
+                "aliases": [
+                    "Omni",
+                    "omni"
+                ],
+                "extensions": [
+                    ".omni"
+                ],
+                "configuration": "./language-configuration.json"
+            }
+        ],
+        "grammars": [
+            {
+                "language": "omni",
+                "scopeName": "source.omni",
+                "path": "./syntaxes/omni.tmLanguage.json"
+            }
+        ]
+    }
+}

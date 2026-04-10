@@ -127,20 +127,23 @@ impl Parser {
         let mut interfaces = Vec::new();
         let mut classes = Vec::new();
 
-        // import declarations
-        while *self.peek() == Token::Import {
-            self.advance();
-            let name = self.expect_ident()?;
-            self.expect(Token::Semicolon, "';' after import")?;
-            imports.push(name);
-        }
-
-        // Optional namespace
-        if *self.peek() == Token::Namespace {
-            self.advance();
-            let name = self.expect_ident()?;
-            self.expect(Token::Semicolon, "';' after namespace")?;
-            namespace = Some(name);
+        // Parse imports and namespace in any order
+        loop {
+            match self.peek() {
+                Token::Import => {
+                    self.advance();
+                    let name = self.expect_ident()?;
+                    self.expect(Token::Semicolon, "';' after import")?;
+                    imports.push(name);
+                }
+                Token::Namespace => {
+                    self.advance();
+                    let name = self.expect_ident()?;
+                    self.expect(Token::Semicolon, "';' after namespace")?;
+                    namespace = Some(name);
+                }
+                _ => break,
+            }
         }
 
         // Class and Interface definitions
@@ -374,12 +377,38 @@ impl Parser {
     // ── EBNF: <param_list> ───────────────────────────────────────────────
 
     fn parse_param_list(&mut self) -> Result<Vec<Param>, ParseError> {
+        if *self.peek() == Token::RParen {
+            return Ok(Vec::new());
+        }
         let mut params = vec![self.parse_param()?];
         while *self.peek() == Token::Comma {
             self.advance();
             params.push(self.parse_param()?);
         }
         Ok(params)
+    }
+
+    fn parse_closure_param_list(&mut self) -> Result<Vec<Param>, ParseError> {
+        if *self.peek() == Token::RParen {
+            return Ok(Vec::new());
+        }
+        let mut params = vec![self.parse_closure_param()?];
+        while *self.peek() == Token::Comma {
+            self.advance();
+            params.push(self.parse_closure_param()?);
+        }
+        Ok(params)
+    }
+
+    fn parse_closure_param(&mut self) -> Result<Param, ParseError> {
+        let name = self.expect_var_ident()?;
+        let ty = if *self.peek() == Token::Colon {
+            self.advance();
+            self.parse_type_expr()?
+        } else {
+            TypeExpr::Named { name: "method".to_string(), type_args: vec![], optional: false }
+        };
+        Ok(Param { is_in_mode: false, name, ty })
     }
 
     fn parse_param(&mut self) -> Result<Param, ParseError> {
@@ -421,6 +450,7 @@ impl Parser {
             Token::Try     => self.parse_try_stmt(),
             Token::Throw   => self.parse_throw_stmt(),
             Token::Monitor => self.parse_monitor_stmt(),
+            Token::Switch  => self.parse_switch_stmt(),
             _              => self.parse_expr_or_assign_stmt(),
         }
     }
@@ -547,6 +577,34 @@ impl Parser {
         self.expect(Token::RParen, "')'")?;
         let body = self.parse_block()?;
         Ok(Stmt::Monitor { target, body })
+    }
+
+    fn parse_switch_stmt(&mut self) -> Result<Stmt, ParseError> {
+        self.advance(); // 'switch'
+        self.expect(Token::LParen, "'('")?;
+        let condition = self.parse_expr()?;
+        self.expect(Token::RParen, "')'")?;
+        self.expect(Token::LBrace, "'{'")?;
+        let mut cases = Vec::new();
+        let mut default_case = None;
+        while *self.peek() != Token::RBrace && *self.peek() != Token::Eof {
+            if *self.peek() == Token::Case {
+                self.advance();
+                let value = self.parse_expr()?;
+                self.expect(Token::Colon, "':' after case value")?;
+                let body = self.parse_block()?;
+                cases.push(SwitchCase { value, body });
+            } else if *self.peek() == Token::Default {
+                self.advance();
+                self.expect(Token::Colon, "':' after default")?;
+                default_case = Some(self.parse_block()?);
+                break; 
+            } else {
+                break;
+            }
+        }
+        self.expect(Token::RBrace, "'}'")?;
+        Ok(Stmt::Switch { condition, cases, default_case })
     }
 
     fn parse_expr_or_assign_stmt(&mut self) -> Result<Stmt, ParseError> {
@@ -692,6 +750,16 @@ impl Parser {
                     self.expect(Token::RParen, "')'")?;
                     expr = Expr::Call { callee: Box::new(expr), args };
                 }
+                Token::LBracket => {
+                    self.advance();
+                    let mut indices = vec![self.parse_expr()?];
+                    while *self.peek() == Token::Comma {
+                        self.advance();
+                        indices.push(self.parse_expr()?);
+                    }
+                    self.expect(Token::RBracket, "']'")?;
+                    expr = Expr::ArrayAccess { array: Box::new(expr), indices };
+                }
                 _ => break,
             }
         }
@@ -708,9 +776,11 @@ impl Parser {
             Token::Null             => { self.advance(); Ok(Expr::Null) }
             Token::Ident(name)      => { self.advance(); Ok(Expr::Ident(name)) }
             Token::ClassIdent(name) => { self.advance(); Ok(Expr::Ident(name)) }
+            Token::This             => { self.advance(); Ok(Expr::This) }
+            Token::Super            => { self.advance(); Ok(Expr::Super) }
             Token::New => {
                 self.advance();
-                let class_name = self.expect_class_ident()?;
+                let class_name = self.expect_type_name()?;
                 
                 let mut type_args = Vec::new();
                 if *self.peek() == Token::LAngle {
@@ -723,22 +793,43 @@ impl Parser {
                     self.expect(Token::RAngle, "'>'")?;
                 }
                 
-                self.expect(Token::LParen, "'('")?;
-                let args = self.parse_arg_list()?;
-                self.expect(Token::RParen, "')'")?;
-                Ok(Expr::New { class_name, type_args, args })
+                if *self.peek() == Token::LBracket {
+                    // Handle new Int[10, 10]
+                    self.advance();
+                    let mut sizes = vec![self.parse_expr()?];
+                    while *self.peek() == Token::Comma {
+                        self.advance();
+                        sizes.push(self.parse_expr()?);
+                    }
+                    self.expect(Token::RBracket, "']'")?;
+                    return Ok(Expr::ArrayAlloc { 
+                        element_type: TypeExpr::Named { name: class_name, type_args, optional: false }, 
+                        sizes 
+                    });
+                } else {
+                    self.expect(Token::LParen, "'('")?;
+                    let args = self.parse_arg_list()?;
+                    self.expect(Token::RParen, "')'")?;
+                    Ok(Expr::New { class_name, type_args, args })
+                }
             }
-            Token::Function => {
-                // Anonymous closure: function(params) { body }
+            Token::Function | Token::Method => {
                 self.advance();
                 self.expect(Token::LParen, "'('")?;
                 let params = if *self.peek() == Token::RParen {
                     Vec::new()
                 } else {
-                    self.parse_param_list()?
+                    self.parse_closure_param_list()?
                 };
                 self.expect(Token::RParen, "')'")?;
-                let body = self.parse_block()?;
+                
+                let body = if *self.peek() == Token::DoubleArrow {
+                    self.advance(); // consume =>
+                    let expr = self.parse_expr()?;
+                    vec![Stmt::Return(Some(expr))]
+                } else {
+                    self.parse_block()?
+                };
                 Ok(Expr::Closure { params, body })
             }
             Token::LParen => {
@@ -765,7 +856,7 @@ impl Parser {
                     let params = if *self.peek() == Token::RParen {
                         Vec::new()
                     } else {
-                        self.parse_param_list()?
+                        self.parse_closure_param_list()?
                     };
                     self.expect(Token::RParen, "')'")?;
                     self.expect(Token::Arrow, "'->'")?;
@@ -787,14 +878,36 @@ impl Parser {
         }
     }
 
-    fn parse_arg_list(&mut self) -> Result<Vec<Expr>, ParseError> {
+
+
+    fn parse_arg_list(&mut self) -> Result<Vec<Arg>, ParseError> {
         if *self.peek() == Token::RParen {
             return Ok(Vec::new());
         }
-        let mut args = vec![self.parse_expr()?];
-        while *self.peek() == Token::Comma {
-            self.advance();
-            args.push(self.parse_expr()?);
+        let mut args = Vec::new();
+        loop {
+            let name = if let Token::Ident(n) = self.peek() {
+                // Peek lookahead for `name:`
+                if self.pos + 1 < self.tokens.len() && self.tokens[self.pos + 1].token == Token::Colon {
+                    let name = n.clone();
+                    self.advance(); // identifier
+                    self.advance(); // colon
+                    Some(name)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            
+            let value = self.parse_expr()?;
+            args.push(Arg { name, value });
+            
+            if *self.peek() == Token::Comma {
+                self.advance();
+            } else {
+                break;
+            }
         }
         Ok(args)
     }
@@ -809,6 +922,7 @@ impl Parser {
             Token::TypeFloat  => "Float".to_string(),
             Token::TypeString => "String".to_string(),
             Token::TypeBool   => "Bool".to_string(),
+            Token::Method     => "method".to_string(),
             Token::ClassIdent(n) => n.clone(),
             Token::Ident(n)      => n.clone(),
             _ => return Err(ParseError::UnexpectedToken {
@@ -847,6 +961,7 @@ impl Parser {
         }
 
         let name = self.expect_type_name()?;
+        
         let type_args = if *self.peek() == Token::LAngle {
             self.advance();
             let mut args = vec![self.parse_type_expr()?];
@@ -859,6 +974,31 @@ impl Parser {
         } else {
             Vec::new()
         };
+
+        // Check for array dimensions: [,,]
+        if *self.peek() == Token::LBracket {
+            self.advance();
+            let mut dimensions = 1;
+            while *self.peek() == Token::Comma {
+                self.advance();
+                dimensions += 1;
+            }
+            self.expect(Token::RBracket, "']'")?;
+            
+            let optional = if *self.peek() == Token::Question {
+                self.advance();
+                true
+            } else {
+                false
+            };
+            
+            return Ok(TypeExpr::Array { 
+                element_type: Box::new(TypeExpr::Named { name, type_args, optional: false }),
+                dimensions,
+                optional
+            });
+        }
+
         let optional = if *self.peek() == Token::Question {
             self.advance();
             true

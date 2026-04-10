@@ -18,10 +18,94 @@ use semantic::Analyzer;
 /// Full compilation pipeline: lex → parse → semantic analysis → annotated AST.
 /// Returns errors as a combined string if anything fails.
 pub fn compile(source: &str) -> Result<ast::Program, String> {
-    // Phase 1 + 2: Lex and Parse
-    let mut lexer = Lexer::new(source);
-    let tokens = lexer.tokenize().map_err(|e| format!("Lex error: {:?}", e))?;
-    let mut parser = Parser::new(tokens);
+    let mut all_tokens = Vec::new();
+    let mut imported_files = std::collections::HashSet::new();
+    
+    // Internal helper for recursive imports
+    fn resolve_imports(source: &str, all_tokens: &mut Vec<lexer::SpannedToken>, imported: &mut std::collections::HashSet<String>, is_main: bool) -> Result<(), String> {
+        let mut lexer = Lexer::new(source);
+        let tokens = lexer.tokenize().map_err(|e| format!("Lex error: {:?}", e))?;
+        
+        let mut i = 0;
+        let mut remaining_tokens = Vec::new();
+        let mut main_namespace_tokens = Vec::new();
+        
+        while i < tokens.len() {
+            match &tokens[i].token {
+                token::Token::Import => {
+                    if i + 2 < tokens.len() {
+                        if let token::Token::StringLiteral(ref path) = tokens[i+1].token {
+                            if tokens[i+2].token == token::Token::Semicolon {
+                                if !imported.contains(path) {
+                                    imported.insert(path.clone());
+                                    match std::fs::read_to_string(path) {
+                                        Ok(content) => {
+                                            resolve_imports(&content, all_tokens, imported, false)?;
+                                        }
+                                        Err(e) => return Err(format!("Import error: Cannot read '{}': {}", path, e)),
+                                    }
+                                }
+                                i += 3;
+                                continue;
+                            }
+                        }
+                    }
+                    return Err("Invalid import syntax. Expected: import \"filename.omni\";".to_string());
+                }
+                token::Token::Namespace => {
+                    if is_main {
+                        // Keep namespace from main file
+                        main_namespace_tokens.push(tokens[i].clone()); // namespace
+                        i += 1;
+                        // Expect identifier(s) and semicolon
+                        while i < tokens.len() && tokens[i].token != token::Token::Semicolon {
+                            main_namespace_tokens.push(tokens[i].clone());
+                            i += 1;
+                        }
+                        if i < tokens.len() {
+                            main_namespace_tokens.push(tokens[i].clone()); // semicolon
+                            i += 1;
+                        }
+                    } else {
+                        // Skip namespace in imported files
+                        i += 1;
+                        while i < tokens.len() && tokens[i].token != token::Token::Semicolon {
+                            i += 1;
+                        }
+                        if i < tokens.len() { i += 1; }
+                    }
+                }
+                token::Token::Eof => {
+                    i += 1;
+                }
+                _ => {
+                    remaining_tokens.push(tokens[i].clone());
+                    i += 1;
+                }
+            }
+        }
+        
+        // Ensure namespace stays at the very top of all_tokens
+        if is_main && !main_namespace_tokens.is_empty() {
+            let mut new_tokens = main_namespace_tokens;
+            new_tokens.extend(all_tokens.drain(..));
+            new_tokens.extend(remaining_tokens);
+            *all_tokens = new_tokens;
+        } else {
+            all_tokens.extend(remaining_tokens);
+        }
+        Ok(())
+    }
+
+    resolve_imports(source, &mut all_tokens, &mut imported_files, true)?;
+    
+    // Add a single EOF at the end
+    all_tokens.push(lexer::SpannedToken {
+        token: token::Token::Eof,
+        span: lexer::Span { line: 0, col: 0 },
+    });
+
+    let mut parser = Parser::new(all_tokens);
     let program = parser.parse_program().map_err(|e| format!("Parse error: {:?}", e))?;
 
     // Phase 3: Semantic Analysis
@@ -90,7 +174,7 @@ mod tests {
 
     #[test]
     fn test_keywords_recognized() {
-        let tokens = lex("class function var foreach FORALL");
+        let tokens = lex("class function var foreach forall");
         assert_eq!(tokens[0], Token::Class);
         assert_eq!(tokens[1], Token::Function);
         assert_eq!(tokens[2], Token::Var);

@@ -1,0 +1,31 @@
+class Calculator {
+    public function applyOp(a: Int, b: Int, op: method) : Int {
+        return op(a, b);
+    }
+}
+
+class Main {
+    public function main() {
+        print("--- Testing Higher-Order Functions ---");
+        var calc = new Calculator();
+        
+        // Lambda / Arrow function as a value
+        var add = method(x, y) { return x + y; };
+        var mul = method(x, y) => x * y; // Shorthand if supported
+        
+        print("10 + 20 =", calc.applyOp(10, 20, add));
+        
+        // Closure capture
+        var factor = 5;
+        var multiplier = method(x) {
+            return x * factor;
+        };
+        
+        print("6 * factor(5) =", multiplier(6));
+        
+        // Passing anonymous method directly
+        print("100 / 2 =", calc.applyOp(100, 2, method(a, b) { return a / b; }));
+        
+        print("Done.");
+    }
+}

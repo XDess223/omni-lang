@@ -1,126 +1,135 @@
-# 🚀 Omni Language: From 0 to Pro
+# Omni Language Guided Introduction: From 0 to Pro
 
-Omni is a state-of-the-art programming language built for **safety**, **concurrency**, and **performance**. This guide will take you from your first "Hello World" to architecting high-performance parallel systems.
+Welcome to Omni, the programming language designed for **Performance**, **Concurrency**, and **Safety**. This guide takes you from your first "Hello Omni" to building high-performance, parallel applications with robust exception handling.
 
 ---
 
-## 🟢 Level 0: The Basics
+## 🚀 1. Getting Started: The Omni Zen
 
-### 1. Hello World
-The entry point is a class named `Main` with a `main` method.
+Omni is a **Nominal**, **Statically-Typed** (with inference), **Object-Oriented** language.
+- **Safety**: Null-safe by default. Use `?` for options.
+- **Speed**: Compiled to compact bytecode for a high-performance VM.
+- **Simplicity**: No complex borrow checkers, just a fast Incremental GC.
 
+### Your First Program
+Create a file `hello.omni`:
 ```omni
 class Main {
     public function main() {
-        print("Hello, Omni!");
+        print("Hello, Omni World!");
     }
 }
 ```
-
-### 2. Variables & Types
-Omni has a strong, nominal type system.
-
-```omni
-var x : Int = 42;
-var pi : Float = 3.14;
-var name = "Omni"; // Type inference handles this
-```
+**Run it**: `omni run hello.omni`
 
 ---
 
-## 🟡 Level 1: Reliability & Safety
+## 💎 2. Core Syntax & Data Types
 
-### 3. Null Safety
-Omni is null-safe by default. You cannot assign `null` to a standard type. Use `?` for optionals.
+Omni keywords are modern and expressive.
 
+### Variables & Types
 ```omni
-var safe : String = null;    // ❌ Error!
-var maybe : String? = null;  // ✅ OK
+var count = 42;                 // Inferred as Int
+var name : String = "Omni";     // Explicit type
+var score : Float = 3.14;
+var isReady : Bool = true;
+var maybeAge : Int? = null;     // Optional type (Null-Safe)
 ```
 
-### 4. Method Modes (`in`)
-Protect your objects from accidental mutation. `in` parameters are read-only views.
-
+### Control Flow
 ```omni
-public function show(in user: User) {
-    user.name = "New"; // ❌ Error: 'in' parameters are immutable!
+if (count > 0) {
+    print("Positive");
+} else {
+    print("Zero or negative");
+}
+
+foreach (item in items) {
+    print(item);
 }
 ```
 
 ---
 
-## 🟠 Level 2: Modern Patterns
+## ⚡ 3. Objects & Classes
 
-### 5. Generics
-Write reusable code with `List<T>`.
-
-```omni
-var list = new List<String>();
-list.add("First");
-var item : String = list.get(0);
-```
-
-### 6. Higher-Order Functions
-Functions are first-class. Pass them around easily.
+Everything in Omni is an object. Classes support fields, methods, and constructors.
 
 ```omni
-public function runTwice(in task: () -> Void) {
-    task();
-    task();
-}
+class Student {
+    private var name : String;
+    private var grade : Int;
 
-runTwice(() => print("Done!"));
-```
+    public Student(in n : String, in g : Int) {
+        name = n;
+        grade = g;
+    }
 
----
-
-## 🔴 Level 3: Professional Concurrency
-
-### 7. Statements-Level Parallelism (`forall`)
-Don't just loop — parallelize. `forall` runs iterations across all available CPU cores.
-
-```omni
-forall (i = 0 to items.size()) {
-    processLargeDataset(items.get(i));
-}
-```
-
-### 8. Synchronization (`monitor`)
-Safe shared state is achieved via `monitor` blocks. They are ultra-lightweight and lock-free where possible.
-
-```omni
-class Counter {
-    private var count = 0;
-    public function inc() {
-        monitor(this) {
-            count = count + 1;
-        }
+    public function describe() {
+        print(name + " has grade " + grade);
     }
 }
+
+// Usage
+var s = new Student("Alice", 95);
+s.describe();
 ```
 
 ---
 
-## ⚙️ The Toolchain
+## 🛡️ 4. Robust Exception Handling (New!)
 
-### Installing
-```powershell
-cargo install --path omni-cli --locked
+Omni features a sophisticated stack-unwinding exception system with guaranteed `finally` execution.
+
+```omni
+try {
+    throw new NetworkException("Timeout");
+} catch (NetworkException e) {
+    print("Caught: " + e.getMessage());
+} finally {
+    print("This always runs, even if you return or throw!");
+}
 ```
 
-### Running
-```powershell
-omni run your_file.omni
+### Return from Try
+Omni ensures that if you `return` from a `try` block, the `finally` block executes *before* the function actually returns.
+
+---
+
+## 🏎️ 5. Concurrency: The Professional Level
+
+Omni is built for the multicore era.
+
+### Parallel Loops (`forall`)
+Process collections in parallel with zero boilerplate.
+```omni
+forall (i = 0 to 1000) {
+    doWork(i); // Efficiently distributed across CPU cores
+}
 ```
 
-### Checking (Static Analysis)
-```powershell
-omni check your_file.omni
+### Monitors (Thread Safety)
+Protect shared data using the `monitor` keyword.
+```omni
+monitor (sharedObject) {
+    sharedObject.increment(); // Thread-safe execution
+}
 ```
 
 ---
 
-## 🛡️ Omni Philosophy
-1. **Safety First**: Null-safe, Memory-safe, Thread-safe.
-2. **Readability**: Nominal types and explicit modes make code self-documenting.
-3. **Power**: High-level concurrency with low-level VM performance.
+## 🛠️ 6. IDE Support
+
+To get syntax highlighting and Omni-aware features in VS Code:
+1. Locate the `omni-vscode/omni-lang-1.0.0.vsix` file.
+2. Run: `code --install-extension omni-lang-1.0.0.vsix`
+
+---
+
+## 🎓 Pro Tips
+- Use `in` parameters for read-only views of data.
+- Checked exceptions must be declared in method signatures: `function run() throws MyException`.
+- String concatenation works naturally with `+`.
+
+**Congratulations! You are now an Omni Developer.**

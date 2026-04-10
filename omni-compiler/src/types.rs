@@ -31,6 +31,9 @@ pub enum OmniType {
     // ── Function / closure type ───────────────────────────────────────
     Function { param_types: Vec<OmniType>, return_type: Box<OmniType> },
 
+    // ── Array type ───────────────────────────────────────────────────
+    Array { element_type: Box<OmniType>, dimensions: usize },
+
     /// Placeholder used before type inference resolves a declaration.
     Inferred,
 }
@@ -62,6 +65,10 @@ impl fmt::Display for OmniType {
                     write!(f, "{}", t)?;
                 }
                 write!(f, ") -> {}", return_type)
+            }
+            OmniType::Array { element_type, dimensions } => {
+                let brackets = ",".repeat(dimensions - 1);
+                write!(f, "{}[{}]", element_type, brackets)
             }
         }
     }
@@ -108,6 +115,11 @@ impl OmniType {
                     return true;
                 }
             }
+        }
+        // Array compatibility: same element type and same dimensions
+        if let (OmniType::Array { element_type: e1, dimensions: d1 },
+                OmniType::Array { element_type: e2, dimensions: d2 }) = (self, other) {
+            return d1 == d2 && e1.as_ref().is_compatible_with(e2);
         }
         false
     }
