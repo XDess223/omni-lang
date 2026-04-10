@@ -14,7 +14,7 @@ class Student {
     }
 
     public function describe() {
-        print(name);
+        print(name, "has a grade of", grade);
     }
 }
 
