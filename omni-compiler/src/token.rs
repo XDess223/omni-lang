@@ -18,6 +18,7 @@ pub enum Token {
 
     // ── Keywords ──────────────────────────────────────────────
     Class,
+    Interface,
     Function,
     Var,
     Return,
@@ -25,6 +26,7 @@ pub enum Token {
     Else,
     Foreach,
     In,
+    To,
     Forall,
     Try,
     Catch,
@@ -34,6 +36,7 @@ pub enum Token {
     New,
     Extends,
     Implements,
+    Monitor,
     Import,
     Namespace,
     Public,
@@ -60,15 +63,17 @@ pub enum Token {
     Lt,
     LtEq,
     Gt,
-    GtEq,
+    GtEq,       // >=
     And,        // &&
     Or,         // ||
     Not,        // !
     Assign,     // =
+    Arrow,      // ->
 
     // ── Punctuation ───────────────────────────────────────────
     Semicolon,
     Colon,
+    DoubleColon, // ::
     Comma,
     Dot,
     Question,   // ? — marks Optional types

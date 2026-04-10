@@ -1,144 +1,130 @@
 // omni-cli/src/main.rs
 // The `omni` command-line tool.
-//
-// Usage:
-//   omni run   <file.omni>          — Compile and execute an Omni source file
-//   omni check <file.omni>          — Typecheck only, print errors (no execution)
-//   omni help                       — Print this message
 
-use std::{env, fs, process};
-
+use std::{env, fs, process, time::Instant};
 use omni_compiler::{compile, codegen::CodeGen};
 use omni_vm::vm::Vm;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
 
-    // ── Dispatch on sub-command ────────────────────────────────────────────
     match args.get(1).map(String::as_str) {
         Some("run")   => cmd_run(&args),
         Some("check") => cmd_check(&args),
         Some("help") | Some("--help") | Some("-h") => print_help(),
         _ => {
-            eprintln!("Omni — Unknown or missing sub-command.");
+            eprintln!("\x1b[1;31mError:\x1b[0m Unknown or missing sub-command.");
             eprintln!("Run `omni help` for usage.");
             process::exit(1);
         }
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// omni run <file.omni>
-// ─────────────────────────────────────────────────────────────────────────────
 fn cmd_run(args: &[String]) {
     let path = require_file_arg(args, "run");
+    let start_time = Instant::now();
+
+    println!("\x1b[1;34m╔══════════════════════════════════════════╗\x1b[0m");
+    println!("\x1b[1;34m║        Omni Execution Pipeline           ║\x1b[0m");
+    println!("\x1b[1;34m╚══════════════════════════════════════════╝\x1b[0m");
 
     let source = read_source(&path);
 
-    // ── Phase 1–3: Compile (lex + parse + semantic) ───────────────────────
+    // ── Stage 1: Semantic Analysis ────────────────────────────────────────
+    print!("  \x1b[1;36m[1/3]\x1b[0m Analyzing symbols & safety... ");
     let program = match compile(&source) {
-        Ok(p)  => p,
+        Ok(p)  => { println!("\x1b[32mOK\x1b[0m"); p },
         Err(e) => {
-            eprintln!("❌  Compile error in '{}':\n{}", path, e);
+            println!("\x1b[31mFAILED\x1b[0m");
+            eprintln!("\n\x1b[1;31m❌ Semantic Error:\x1b[0m\n{}", e);
             process::exit(1);
         }
     };
 
-    // ── Phase 4: Bytecode generation ─────────────────────────────────────
+    // ── Stage 2: Bytecode Generation ──────────────────────────────────────
+    print!("  \x1b[1;36m[2/3]\x1b[0m Generating bytecode... ");
     let mut gen = CodeGen::new();
     gen.generate(&program);
     let compiled = gen.output;
+    println!("\x1b[32mOK\x1b[0m");
 
-    // ── Phase 5: Execute in the VM ────────────────────────────────────────
-    // Convention: a method named "Main::main" is the entry point.
-    // If this method does not exist, try any available method for demo purposes.
+    // ── Stage 3: VM Initialization & Execution ────────────────────────────
     let entry = find_entry(&compiled);
     match entry {
         Some(key) => {
-            println!("▶  Running '{}' …\n", key);
+            println!("  \x1b[1;36m[3/3]\x1b[0m Invoking \x1b[1m{}\x1b[0m...\n", key);
             let mut vm = Vm::new(compiled);
+            
+            // Background thread setup (if any)
+            if vm.thread_id == 0 {
+                // Main thread indicator
+            }
+
             match vm.execute(&key) {
-                Ok(Some(val)) => println!("\n✅  Exited with: {:?}", val),
-                Ok(None)      => println!("\n✅  Program completed."),
-                Err(e)        => {
-                    eprintln!("\n❌  Runtime error: {:?}", e);
+                Ok(result) => {
+                    let elapsed = start_time.elapsed();
+                    println!("\n\x1b[1;32m✅ Program completed successfully in {:?}\x1b[0m", elapsed);
+                    if let Some(val) = result {
+                        println!("Result: \x1b[33m{:?}\x1b[0m", val);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("\n\x1b[1;31m❌ Runtime Error: {:?}\x1b[0m", e);
                     process::exit(1);
                 }
             }
         }
         None => {
-            let mut keys: Vec<_> = compiled.methods.keys().collect();
-            keys.sort();
-            eprintln!("❌  No entry point found. Define a class 'Main' with a method 'main'.");
-            eprintln!("    Available methods: {:?}", keys);
+            eprintln!("\x1b[1;31m❌ Error:\x1b[0m No entry point found. Add `class Main {{ public function main() ... }}`");
             process::exit(1);
         }
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// omni check <file.omni>
-// ─────────────────────────────────────────────────────────────────────────────
 fn cmd_check(args: &[String]) {
     let path = require_file_arg(args, "check");
     let source = read_source(&path);
 
+    println!("\x1b[1;34mOmni Static Analysis Check\x1b[0m");
     match compile(&source) {
         Ok(program) => {
-            let class_count  = program.classes.len();
-            let method_count: usize = program.classes.iter()
-                .map(|c| c.members.iter().filter(|m| {
-                    matches!(m, omni_compiler::ast::ClassMember::Method(_, _))
-                }).count())
-                .sum();
-
-            println!("✅  '{}' — OK", path);
-            println!("    {} class(es), {} method(s) found.", class_count, method_count);
+            let class_count = program.classes.len();
+            println!("\x1b[32m✅ Analysis Passed: '{}'\x1b[0m", path);
+            println!("   Found {} class(es).", class_count);
         }
         Err(e) => {
-            eprintln!("❌  '{}' — Errors found:", path);
+            eprintln!("\x1b[31m❌ Errors found in '{}':\x1b[0m", path);
             eprintln!("{}", e);
             process::exit(1);
         }
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Returns the first suitable entry point from the compiled program.
-/// Priority: "Main::main" → any method ending in "::main" → first available.
 fn find_entry(compiled: &omni_compiler::bytecode::CompiledProgram) -> Option<String> {
     if compiled.methods.contains_key("Main::main") {
-        return Some("Main::main".to_string());
+        Some("Main::main".to_string())
+    } else if let Some(k) = compiled.methods.keys().find(|k| k.ends_with("::main")) {
+        Some(k.clone())
+    } else {
+        compiled.methods.keys().next().cloned()
     }
-    if let Some(k) = compiled.methods.keys().find(|k| k.ends_with("::main")) {
-        return Some(k.clone());
-    }
-    compiled.methods.keys().next().cloned()
 }
 
-/// Read a `.omni` source file from disk.
 fn read_source(path: &str) -> String {
-    if !path.ends_with(".omni") {
-        eprintln!("⚠️   Warning: '{}' does not have a .omni extension.", path);
-    }
     match fs::read_to_string(path) {
-        Ok(src) => src,
-        Err(e)  => {
-            eprintln!("❌  Cannot read '{}': {}", path, e);
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("\x1b[31m❌ File Error:\x1b[0m Cannot read '{}': {}", path, e);
             process::exit(1);
         }
     }
 }
 
-/// Extract the required file path argument, or print usage and exit.
-fn require_file_arg<'a>(args: &'a [String], cmd: &str) -> String {
+fn require_file_arg(args: &[String], cmd: &str) -> String {
     match args.get(2) {
         Some(p) => p.clone(),
         None => {
-            eprintln!("❌  Usage: omni {} <file.omni>", cmd);
+            println!("Usage: omni {} <file.omni>", cmd);
             process::exit(1);
         }
     }
@@ -146,38 +132,24 @@ fn require_file_arg<'a>(args: &'a [String], cmd: &str) -> String {
 
 fn print_help() {
     println!(
-r#"
-╔══════════════════════════════════════════╗
+        r#"
+\x1b[1;34m╔══════════════════════════════════════════╗
 ║        Omni Language Toolchain           ║
-╚══════════════════════════════════════════╝
+╚══════════════════════════════════════════╝\x1b[0m
 
-USAGE:
+\x1b[1mUSAGE:\x1b[0m
   omni <command> <file.omni>
 
-COMMANDS:
-  run   <file.omni>   Compile and execute an Omni source file.
-  check <file.omni>   Type-check only — prints errors without running.
-  help                Show this help message.
+\x1b[1mCOMMANDS:\x1b[0m
+  run   <file.omni>   Compile and execute in the parallel VM.
+  check <file.omni>   Perform full semantic validation.
+  help                Show this message.
 
-EXAMPLES:
-  omni run   hello.omni
-  omni check student.omni
-
-ENTRY POINT:
-  The VM looks for a class called 'Main' with a method 'main':
-
-    class Main {{
-        public function main() {{
-            print("Hello, Omni!");
-        }}
-    }}
-
-SOURCE FILES:
-  Omni source files use the .omni extension.
-  Naming rules:
-    - Classes must start with a Capital letter  (e.g.  Student, Main)
-    - Variables must start with a lowercase letter (e.g. name, total)
-    - The keyword 'goto' is forbidden.
+\x1b[1mPHILOSOPHY:\x1b[0m
+  Omni is built for \x1b[36mSafety\x1b[0m, \x1b[36mConcurrency\x1b[0m, and \x1b[36mSpeed\x1b[0m.
+  - Nominal Typing
+  - Null-Safe by Default
+  - Thread-local GC with Atomic Monitors
 "#
     );
 }

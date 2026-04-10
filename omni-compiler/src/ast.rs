@@ -9,7 +9,28 @@
 pub struct Program {
     pub imports: Vec<String>,
     pub namespace: Option<String>,
+    pub interfaces: Vec<InterfaceDef>,
     pub classes: Vec<ClassDef>,
+}
+
+// ── Interface Definitions ──────────────────────────────────────────────────
+
+/// <interface_def> → interface <id> [extends <ident_list>] '{' { <interface_member> } '}'
+#[derive(Debug, Clone)]
+pub struct InterfaceDef {
+    pub name: String,
+    pub type_params: Vec<TypeParam>,
+    pub extends: Vec<String>,
+    pub methods: Vec<MethodDecl>,
+}
+
+/// A method declaration inside an interface (no body)
+#[derive(Debug, Clone)]
+pub struct MethodDecl {
+    pub name: String,
+    pub params: Vec<Param>,
+    pub throws: Vec<String>,
+    pub return_type: Option<TypeExpr>,
 }
 
 // ── Class Definitions ────────────────────────────────────────────────────
@@ -19,9 +40,16 @@ pub struct Program {
 #[derive(Debug, Clone)]
 pub struct ClassDef {
     pub name: String,                        // Must be uppercase (ClassIdent)
+    pub type_params: Vec<TypeParam>,         // Generics e.g. <T extends Ident>
     pub extends: Option<String>,
     pub implements: Vec<String>,
     pub members: Vec<ClassMember>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TypeParam {
+    pub name: String,
+    pub bound: Option<String>, // e.g. "Comparable" in <T extends Comparable>
 }
 
 /// <class_member> → <access_mod> <method_def> | <access_mod> <var_decl> ;
@@ -77,8 +105,8 @@ pub enum Stmt {
     If { cond: Expr, then_block: Block, else_block: Option<Block> },
     /// foreach (<id> in <collection>) <block>
     Foreach { var: String, collection: Expr, body: Block },
-    /// FORALL (<id> in <collection>) <block>  — statement-level concurrency
-    Forall { var: String, collection: Expr, body: Block },
+    /// forall (<id> = <expr> to <expr>) <block> — statement-level concurrency
+    Forall { var: String, start: Expr, end: Expr, body: Block },
     /// try <block> catch (<id> <id>) <block> [finally <block>]
     TryCatch {
         try_block: Block,
@@ -87,6 +115,8 @@ pub enum Stmt {
     },
     /// throw <expr>
     Throw(Expr),
+    /// monitor (<expr>) <block> — mutual exclusion
+    Monitor { target: Expr, body: Block },
     /// A bare expression statement: method calls, etc.
     ExprStmt(Expr),
 }
@@ -127,8 +157,8 @@ pub enum Expr {
     /// method_name(arg1, arg2, ...)  — also handles keyword args
     Call { callee: Box<Expr>, args: Vec<Expr> },
 
-    /// new ClassName(args)
-    New { class_name: String, args: Vec<Expr> },
+    /// new ClassName<T1, T2>(args)
+    New { class_name: String, type_args: Vec<TypeExpr>, args: Vec<Expr> },
 
     /// Binary operation: left OP right
     BinOp { op: BinOp, left: Box<Expr>, right: Box<Expr> },
@@ -154,10 +184,26 @@ pub enum UnaryOp {
 
 // ── Types ────────────────────────────────────────────────────────────────
 
-/// A type expression, e.g. `Int`, `String?`, `List<Student>`
+/// A type expression, e.g. `Int`, `String?`, `List<Student>`, `(Int, Int) -> Int`
 #[derive(Debug, Clone)]
-pub struct TypeExpr {
-    pub name: String,
-    pub type_args: Vec<TypeExpr>,            // for generics: List<T>
-    pub optional: bool,                      // true when '?' is present
+pub enum TypeExpr {
+    Named {
+        name: String,
+        type_args: Vec<TypeExpr>,
+        optional: bool,
+    },
+    Function {
+        params: Vec<TypeExpr>,
+        return_type: Box<TypeExpr>,
+        optional: bool,
+    }
+}
+
+impl TypeExpr {
+    pub fn is_optional(&self) -> bool {
+        match self {
+            TypeExpr::Named { optional, .. } => *optional,
+            TypeExpr::Function { optional, .. } => *optional,
+        }
+    }
 }

@@ -1,10 +1,6 @@
-// omni-vm/src/vm.rs
-// Phase 5: Omni Stack-Based Virtual Machine
-//
-// Executes the bytecode Chunks produced by omni-compiler::codegen.
-// Uses a call-frame stack, an operand stack, and the incremental GC.
-
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::sync::atomic::Ordering;
 use crate::gc::{GarbageCollector, HeapHandle, Value};
 use omni_compiler::bytecode::{Chunk, CompiledProgram, Instruction};
 
@@ -19,14 +15,17 @@ struct CallFrame {
     /// Local variable slots.
     locals: Vec<Value>,
     /// The method key (for diagnostics).
+    #[allow(dead_code)]
     name: String,
+    /// Active try block handler IPs.
+    catch_blocks: Vec<u32>,
 }
 
 impl CallFrame {
     fn new(chunk: Chunk, name: String, arg_count: usize) -> Self {
         // Pre-allocate enough slots (self + params + declared locals).
         let locals = vec![Value::Null; 256.max(arg_count + 1)];
-        Self { chunk, ip: 0, locals, name }
+        Self { chunk, ip: 0, locals, name, catch_blocks: Vec::new() }
     }
 
     fn read_instr(&mut self) -> Option<&Instruction> {
@@ -60,11 +59,14 @@ pub struct Vm {
     /// Call frame stack.
     frames: Vec<CallFrame>,
     /// The incremental garbage collector.
-    pub gc: GarbageCollector,
+    pub gc: Arc<Mutex<GarbageCollector>>,
     /// Global variables / static fields.
+    #[allow(dead_code)]
     globals: HashMap<String, Value>,
     /// Currently active exception (if any).
     current_exception: Option<Value>,
+    /// Unique ID for this thread (0 = main).
+    pub thread_id: i32,
 }
 
 impl Vm {
@@ -73,9 +75,10 @@ impl Vm {
             program,
             stack: Vec::with_capacity(256),
             frames: Vec::new(),
-            gc: GarbageCollector::new(),
+            gc: Arc::new(Mutex::new(GarbageCollector::new())),
             globals: HashMap::new(),
             current_exception: None,
+            thread_id: 0,
         }
     }
 
@@ -96,30 +99,29 @@ impl Vm {
     // ── GC integration ────────────────────────────────────────────────────
 
     /// Collect live roots from the operand stack and all locals.
-    fn collect_roots(&self) -> Vec<HeapHandle> {
-        let mut roots = Vec::new();
-        for v in &self.stack {
-            if let Value::Object(h) = v { roots.push(*h); }
+    fn gc_trace_roots(&mut self) {
+        let mut gc = self.gc.lock().unwrap();
+        for val in &self.stack {
+            gc.mark_value(val);
         }
         for frame in &self.frames {
-            for v in &frame.locals {
-                if let Value::Object(h) = v { roots.push(*h); }
+            for val in &frame.locals {
+                gc.mark_value(val);
             }
         }
-        roots
     }
 
     /// Run an incremental GC step if the threshold is exceeded.
     fn maybe_collect(&mut self) {
-        if !self.gc.should_collect() {
+        if !self.gc.lock().unwrap().should_collect() {
             return;
         }
         // Begin a new cycle: seed roots.
-        let roots = self.collect_roots();
-        self.gc.mark_roots(&roots);
+        self.gc_trace_roots();
         // Mark one step per call to keep pauses minimal.
-        if self.gc.mark_step() {
-            self.gc.sweep();
+        let mut gc = self.gc.lock().unwrap();
+        if gc.mark_step() {
+            gc.sweep();
         }
     }
 
@@ -135,23 +137,30 @@ impl Vm {
         let frame = CallFrame::new(chunk, method_key.to_string(), 0);
         self.frames.push(frame);
 
-        self.run()
+        self.run().map(Some)
     }
 
     // ── Main dispatch loop ────────────────────────────────────────────────
 
-    fn run(&mut self) -> Result<Option<Value>, VmError> {
+    pub fn run(&mut self) -> Result<Value, VmError> {
         loop {
-            // Periodically trigger the incremental GC.
-            self.maybe_collect();
+            // Only the main thread triggers incremental GC steps.
+            if self.thread_id == 0 {
+                self.maybe_collect();
+            }
 
             let frame = self.frames.last_mut()
                 .ok_or(VmError::StackUnderflow)?;
 
             let instr = match frame.read_instr() {
                 Some(i) => i.clone(),
-                None    => return Ok(None), // fell off the end
+                None    => return Ok(Value::Null), // fell off the end
             };
+
+            // TRACE LOGGING
+            if std::env::var("OMNI_TRACE").is_ok() {
+                println!("TRACE: {:?}", instr);
+            }
 
             match instr {
 
@@ -165,7 +174,6 @@ impl Vm {
                     let s = frame.chunk.strings.get(i as usize)
                         .cloned()
                         .unwrap_or_default();
-                    drop(frame);
                     self.push(Value::Str(s));
                 }
 
@@ -182,7 +190,6 @@ impl Vm {
                     let v = frame.locals.get(slot as usize)
                         .cloned()
                         .unwrap_or(Value::Null);
-                    drop(frame);
                     self.push(v);
                 }
                 Instruction::StoreLocal(slot) => {
@@ -200,10 +207,9 @@ impl Vm {
                     let field_name = frame.chunk.names.get(name_idx as usize)
                         .cloned()
                         .unwrap_or_default();
-                    drop(frame);
                     let obj_val = self.pop()?;
                     if let Value::Object(handle) = obj_val {
-                        let val = self.gc.get(handle)
+                        let val = self.gc.lock().unwrap().get(handle)
                             .ok_or(VmError::InvalidHandle(handle))?
                             .fields.get(&field_name)
                             .cloned()
@@ -218,13 +224,14 @@ impl Vm {
                     let field_name = frame.chunk.names.get(name_idx as usize)
                         .cloned()
                         .unwrap_or_default();
-                    drop(frame);
                     let obj_val = self.pop()?;
                     let new_val = self.pop()?;
                     if let Value::Object(handle) = obj_val {
-                        if let Some(obj) = self.gc.get_mut(handle) {
+                        if let Some(obj) = self.gc.lock().unwrap().get_mut(handle) {
                             obj.fields.insert(field_name, new_val);
                         }
+                    } else {
+                        return Err(VmError::NullDereference);
                     }
                 }
 
@@ -390,7 +397,6 @@ impl Vm {
                     let fn_name = frame.chunk.names.get(name_idx as usize)
                         .cloned()
                         .unwrap_or_default();
-                    drop(frame);
 
                     if let Some(chunk) = self.program.methods.get(&fn_name).cloned() {
                         let mut new_frame = CallFrame::new(chunk, fn_name, argc as usize);
@@ -417,7 +423,7 @@ impl Vm {
                                 Value::Str(s) => print!("{}", s),
                                 Value::Null => print!("null"),
                                 Value::Object(_) => print!("[Object]"),
-                                Value::Closure(c) => print!("[Closure {}]", c),
+                                Value::Closure(c, _, _) => print!("[Closure {}]", c),
                             }
                         }
                         println!();
@@ -434,11 +440,10 @@ impl Vm {
                     let method_name = frame.chunk.names.get(name_idx as usize)
                         .cloned()
                         .unwrap_or_default();
-                    drop(frame);
 
                     let receiver = self.pop()?;
                     if let Value::Object(handle) = &receiver {
-                        let class_name = self.gc.get(*handle)
+                        let class_name = self.gc.lock().unwrap().get(*handle)
                             .map(|obj| obj.class_name.clone())
                             .unwrap_or_default();
                         let key = format!("{}::{}", class_name, method_name);
@@ -449,6 +454,62 @@ impl Vm {
                                 new_frame.locals[i] = self.pop()?;
                             }
                             self.frames.push(new_frame);
+                        } else if class_name == "List" {
+                            let mut args = Vec::new();
+                            for _ in 0..argc {
+                                args.push(self.pop()?);
+                            }
+                            args.reverse();
+
+                            let mut result = None;
+                            let mut err = None;
+
+                            {
+                                let mut gc = self.gc.lock().unwrap();
+                                let obj_ref = gc.get_mut(*handle).unwrap();
+                                let elements = obj_ref.elements.as_mut().unwrap();
+
+                                match method_name.as_str() {
+                                    "add" => {
+                                        if args.len() == 1 {
+                                            elements.push(args[0].clone());
+                                            result = Some(Value::Null);
+                                        } else {
+                                            err = Some(VmError::UndefinedMethod("List::add requires 1 argument".to_string()));
+                                        }
+                                    }
+                                    "get" => {
+                                        if args.len() == 1 {
+                                            if let Value::Int(idx) = &args[0] {
+                                                if *idx >= 0 && (*idx as usize) < elements.len() {
+                                                    result = Some(elements[*idx as usize].clone());
+                                                } else {
+                                                    err = Some(VmError::TypeError("Index out of bounds".to_string()));
+                                                }
+                                            } else {
+                                                err = Some(VmError::TypeError("List::get requires an integer index".to_string()));
+                                            }
+                                        } else {
+                                            err = Some(VmError::UndefinedMethod("List::get requires 1 argument".to_string()));
+                                        }
+                                    }
+                                    "size" => {
+                                        if args.len() == 0 {
+                                            result = Some(Value::Int(elements.len() as i64));
+                                        } else {
+                                            err = Some(VmError::UndefinedMethod("List::size requires 0 arguments".to_string()));
+                                        }
+                                    }
+                                    _ => err = Some(VmError::UndefinedMethod(key)),
+                                }
+                            }
+
+                            if let Some(e) = err {
+                                return Err(e);
+                            }
+                            if let Some(res) = result {
+                                self.push(res);
+                            }
                         } else {
                             return Err(VmError::UndefinedMethod(key));
                         }
@@ -458,16 +519,55 @@ impl Vm {
                 Instruction::Return => {
                     self.frames.pop();
                     if self.frames.is_empty() {
-                        return Ok(None);
+                        return Ok(Value::Null);
                     }
                 }
                 Instruction::ReturnValue => {
                     let retval = self.pop()?;
                     self.frames.pop();
                     if self.frames.is_empty() {
-                        return Ok(Some(retval));
+                        return Ok(retval);
                     }
                     self.push(retval);
+                }
+
+                // ── Object / Closure Allocation ───────────────────────────
+                Instruction::MakeClosure { name_idx, base_slot } => {
+                    let frame = self.frames.last().unwrap();
+                    let closure_key = frame.chunk.names.get(name_idx as usize)
+                        .cloned()
+                        .unwrap_or_default();
+                    let env = frame.locals.clone();
+                    self.push(Value::Closure(closure_key, env, base_slot));
+                }
+
+                Instruction::CallClosure { argc } => {
+                    let closure_val = self.pop()?;
+
+                    let mut args = Vec::new();
+                    for _ in 0..argc {
+                        args.push(self.pop()?);
+                    }
+                    args.reverse();
+
+                    if let Value::Closure(closure_key, env, base_slot) = closure_val {
+                        if let Some(chunk) = self.program.methods.get(&closure_key).cloned() {
+                            let mut new_frame = CallFrame::new(chunk, closure_key, base_slot as usize + argc as usize);
+                            // Restore the captured environment (this gives the closure access to the parent's locals!)
+                            for (i, val) in env.into_iter().enumerate() {
+                                new_frame.locals[i] = val;
+                            }
+                            // Callers pass arguments; map them to the corresponding arguments offsets
+                            for (i, arg) in args.into_iter().enumerate() {
+                                new_frame.locals[base_slot as usize + i] = arg;
+                            }
+                            self.frames.push(new_frame);
+                        } else {
+                            return Err(VmError::UndefinedMethod(format!("Closure method {} not found", closure_key)));
+                        }
+                    } else {
+                        return Err(VmError::TypeError("Attempted to call a non-closure value".to_string()));
+                    }
                 }
 
                 // ── Object Allocation ─────────────────────────────────────
@@ -476,7 +576,6 @@ impl Vm {
                     let class_name = frame.chunk.names.get(class_idx as usize)
                         .cloned()
                         .unwrap_or_default();
-                    drop(frame);
 
                     let ctor_key = format!("{}::{}", class_name, class_name);
                     let mut args = Vec::new();
@@ -485,11 +584,9 @@ impl Vm {
                     }
                     args.reverse();
 
-                    let handle = self.gc.allocate(&class_name);
+                    let handle = self.gc.lock().unwrap().allocate(&class_name);
                     let obj_val = Value::Object(handle);
-
-                    // Push the newly allocated object for the caller
-                    self.push(obj_val.clone());
+                    self.push(obj_val.clone()); // Push to stack now so it's there after constructor returns
 
                     if let Some(chunk) = self.program.methods.get(&ctor_key).cloned() {
                         let mut ctor_frame = CallFrame::new(chunk, ctor_key, argc as usize + 1);
@@ -506,49 +603,150 @@ impl Vm {
                 Instruction::Throw => {
                     let exc = self.pop()?;
                     self.current_exception = Some(exc);
-                    // Unwind to nearest TryBegin.
-                    // Full unwind logic traverses the frame stack.
+                    
+                    while let Some(frame) = self.frames.last_mut() {
+                        if let Some(handler_ip) = frame.catch_blocks.pop() {
+                            frame.ip = handler_ip as usize;
+                            break;
+                        } else {
+                            self.frames.pop();
+                        }
+                    }
+                    if self.frames.is_empty() {
+                        let msg = match self.current_exception.as_ref().unwrap() {
+                            Value::Object(h) => self.gc.lock().unwrap().get(*h).map(|o| o.class_name.clone()).unwrap_or_default(),
+                            o => format!("{:?}", o),
+                        };
+                        return Err(VmError::CheckedExceptionUnhandled(msg));
+                    }
                 }
-                Instruction::TryBegin { handler_ip: _ } => {
-                    // In a full implementation, push an exception handler record.
-                    // handler_ip is already embedded for the sweep phase.
+                Instruction::TryBegin { handler_ip } => {
+                    self.frames.last_mut().unwrap().catch_blocks.push(handler_ip);
                 }
                 Instruction::TryEnd { past_ip } => {
-                    // Jump past all catch blocks on the normal (no-exception) path.
-                    self.frames.last_mut().unwrap().ip = past_ip as usize;
+                    let frame = self.frames.last_mut().unwrap();
+                    frame.catch_blocks.pop(); // Normal execution passed the protected region
+                    frame.ip = past_ip as usize;
                 }
-                Instruction::CatchMatch { class_idx: _, local_slot } => {
-                    if let Some(exc) = self.current_exception.take() {
+                Instruction::CatchMatch { class_idx, local_slot, next_ip } => {
+                    if let Some(exc) = &self.current_exception {
                         let frame = self.frames.last_mut().unwrap();
-                        frame.locals[local_slot as usize] = exc;
+                        let target_class = frame.chunk.names.get(class_idx as usize).cloned().unwrap_or_default();
+                        
+                        let is_match = match exc {
+                            Value::Object(h) => {
+                                if let Some(obj) = self.gc.lock().unwrap().get(*h) {
+                                    // For prototype, we do exact class matching structure.
+                                    obj.class_name == target_class
+                                } else { false }
+                            },
+                            _ => false,
+                        };
+                        
+                        if is_match {
+                            frame.locals[local_slot as usize] = self.current_exception.take().unwrap();
+                        } else {
+                            frame.ip = next_ip as usize;
+                        }
+                    } else {
+                        self.frames.last_mut().unwrap().ip = next_ip as usize;
                     }
                 }
                 Instruction::Rethrow => {
                     if self.current_exception.is_some() {
-                        // Propagate up — in a full impl this unwinds the frame stack.
+                        // Pop the current frame so we unwind back into caller space
+                        self.frames.pop();
+                        while let Some(frame) = self.frames.last_mut() {
+                            if let Some(handler_ip) = frame.catch_blocks.pop() {
+                                frame.ip = handler_ip as usize;
+                                break;
+                            } else {
+                                self.frames.pop();
+                            }
+                        }
+                        if self.frames.is_empty() {
+                            let msg = "Rethrow reached top of stack".to_string();
+                            return Err(VmError::CheckedExceptionUnhandled(msg));
+                        }
                     }
                 }
 
-                // ── Concurrency stubs ─────────────────────────────────────
                 Instruction::MonitorEnter => {
-                    // Acquire mutex on the object at top of stack.
-                    // Full implementation uses std::sync::Mutex per HeapObject.
-                    let _ = self.peek()?;
+                    let val = self.pop()?;
+                    if let Value::Object(h) = val {
+                        let lock_owner = {
+                            let gc = self.gc.lock().unwrap();
+                            gc.get(h).map(|o| o.lock_owner.clone())
+                        }.ok_or(VmError::InvalidHandle(h))?;
+
+                        // Spin-lock for simplicity (in a real VM, we'd use a Futex/WaitQueue)
+                        while lock_owner.compare_exchange(-1, self.thread_id, Ordering::SeqCst, Ordering::SeqCst).is_err() {
+                            if lock_owner.load(Ordering::SeqCst) == self.thread_id {
+                                // Reentrant lock support (optional but good)
+                                break; 
+                            }
+                            std::thread::yield_now();
+                        }
+                    } else {
+                        return Err(VmError::TypeError("Monitor requires an object".to_string()));
+                    }
                 }
                 Instruction::MonitorExit => {
-                    // Release mutex — stub for Phase 5+ threading implementation.
+                    let val = self.pop()?;
+                    if let Value::Object(h) = val {
+                        let lock_owner = {
+                            let gc = self.gc.lock().unwrap();
+                            gc.get(h).map(|o| o.lock_owner.clone())
+                        }.ok_or(VmError::InvalidHandle(h))?;
+
+                        if lock_owner.load(Ordering::SeqCst) == self.thread_id {
+                            lock_owner.store(-1, Ordering::SeqCst);
+                        }
+                    }
                 }
-                Instruction::ForallBegin { .. } => {
-                    // Signal VM scheduler to dispatch iterations in parallel.
-                    // Stub: sequential execution for now.
+
+                Instruction::ExecuteForall => {
+                    let closure_val = self.pop()?;
+                    let end_val = self.pop()?;
+                    let start_val = self.pop()?;
+
+                    if let (Value::Int(start), Value::Int(end), Value::Closure(key, env, base)) = (start_val, end_val, closure_val) {
+                        let program = self.program.clone();
+                        let shared_gc = self.gc.clone();
+                        
+                        std::thread::scope(|s| {
+                            for i in start..end {
+                                let key = key.clone();
+                                let env = env.clone();
+                                let prog = program.clone();
+                                let gc = shared_gc.clone();
+                                let t_id = (i + 1) as i32; // Unique worker ID
+                                
+                                s.spawn(move || {
+                                    let mut worker_vm = Vm::new(prog);
+                                    worker_vm.gc = gc;
+                                    worker_vm.thread_id = t_id;
+                                    
+                                    let chunk = worker_vm.program.methods.get(&key).unwrap().clone();
+                                    let mut frame = CallFrame::new(chunk, key, base as usize + 1);
+                                    for (j, v) in env.into_iter().enumerate() {
+                                        frame.locals[j] = v;
+                                    }
+                                    frame.locals[base as usize] = Value::Int(i);
+                                    worker_vm.frames.push(frame);
+                                    
+                                    let _ = worker_vm.run();
+                                });
+                            }
+                        });
+                        self.push(Value::Null);
+                    } else {
+                        return Err(VmError::TypeError("Invalid forall arguments".to_string()));
+                    }
                 }
-                Instruction::ForallEnd => {}
 
                 Instruction::Nop  => {}
-                Instruction::Halt => return Ok(None),
-
-                // Float ops not matched above — handled by AddInt's polymorphism.
-                _ => {}
+                Instruction::Halt => return Ok(Value::Null),
             }
         }
     }

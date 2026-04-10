@@ -1,0 +1,33 @@
+class ValueError {}
+class MathError {}
+
+class Helper {
+    public function divide(in a: Int, in b: Int) : Int {
+        if (b == 0) {
+            throw new MathError();
+        }
+        return a / b;
+    }
+}
+
+class Main {
+    public function main() {
+        var h = new Helper();
+        var result = 0;
+
+        try {
+            print("Attempting division...");
+            result = h.divide(10, 0);
+            print("This won't print.");
+        } catch (ValueError v) {
+            print("Caught ValueError");
+        } catch (MathError m) {
+            print("Caught MathError!");
+            result = -1;
+        } finally {
+            print("Finally block executed.");
+        }
+
+        print("Final result:", result);
+    }
+}

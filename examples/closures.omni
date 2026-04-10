@@ -1,0 +1,18 @@
+class Main {
+    public function main() {
+        // Simple first-class function binding
+        var get_ten: () -> Int = () -> {
+            return 10;
+        };
+
+        // Captured environment function binding
+        var counter: Int = 10;
+        var add_to_counter: (Int) -> Int = (x: Int) -> {
+            var res: Int = counter + x;
+            return res;
+        };
+        
+        var result: Int = add_to_counter(get_ten());
+        print(result);
+    }
+}

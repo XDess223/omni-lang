@@ -34,6 +34,10 @@ pub enum SymbolKind {
         parent: Option<String>,
         interfaces: Vec<String>,
     },
+    /// An interface definition.
+    Interface {
+        extends: Vec<String>,
+    },
     /// A function parameter — carries its `in`-mode flag.
     Parameter { in_mode: bool },
 }

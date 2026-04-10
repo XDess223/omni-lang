@@ -1,0 +1,142 @@
+// ============================================================================
+// OMNI WHITEPAPER & PRESENTATION SHOWCASE
+// This file demonstrates the theoretical full syntax of the Omni Programming 
+// Language as specified in its architecture documentation.
+// Note: Currently, only Phase 1 (Null Safety) and Phase 2 (Generics) are 
+// fully supported by the compiler and VM. The rest are planned for upcoming phases!
+// ============================================================================
+
+import System::Console;
+import System::Threading;
+
+// 1. Nominal Equivalent Interface & Custom Exception
+interface IProcessable {
+    public function process();
+}
+
+class ProcessingException extends Exception {
+    public ProcessingException(in msg: String, in cause: Exception?) {
+        // Parent initialization
+        super(msg, cause);
+    }
+}
+
+class NetworkException extends Exception {}
+
+// 2. Encapsulation, Optional Types, and Read-Only Views (in-mode)
+class Person implements IProcessable {
+    private var name: String;
+    private var age: Int;
+    private var title: String?; // Optional type (Null Safety)
+
+    public Person(in n: String, in a: Int) {
+        name = n;
+        age = a;
+        title = null; // Legal because of the ?
+    }
+
+    public function setTitle(in t: String) {
+        title = t;
+    }
+
+    public function process() throws NetworkException {
+        // Safe access to optional
+        if (title != null) {
+            print("Processing: " + title + " " + name);
+        } else {
+            print("Processing: " + name);
+        }
+    }
+}
+
+// 3. Generics with Bounded Wildcards & User-Defined Iterators
+class BatchProcessor<T extends IProcessable> {
+    private var dataQueue: List<T>;
+
+    public BatchProcessor(in initialData: List<T>) {
+        dataQueue = initialData;
+    }
+
+    // 4. Robust Exception Handling (Checked Exceptions)
+    public function executeAll() throws ProcessingException {
+        // Iteration via foreach
+        foreach (item in dataQueue) {
+            try {
+                item.process();
+            } catch (NetworkException e) {
+                // Propagates a wrapped checked exception
+                throw new ProcessingException("Batch failed", e); 
+            } finally {
+                print("Completed queue item.");
+            }
+        }
+    }
+}
+
+// 5. Monitors (Protected Objects for Safe Concurrency)
+monitor SafeCounter {
+    private var count: Int = 0;
+
+    public function increment() {
+        count = count + 1; // Thread-safe automatically
+    }
+
+    public function getCount() : Int {
+        return count;
+    }
+}
+
+class Main {
+    public function main() {
+        // 6. Keyword Parameters
+        var p1 = new Person(n="Alice", a=30);
+        var p2 = new Person(n="Bob", a=45);
+        p1.setTitle("Dr.");
+
+        // 7. Generics Instantiation
+        var processors = new List<Person>();
+        processors.add(p1);
+        processors.add(p2);
+
+        var batch = new BatchProcessor<Person>(processors);
+        
+        try {
+            batch.executeAll();
+        } catch (ProcessingException e) {
+            print("Error executing batch: " + e.getMessage());
+        }
+
+        // 8. Statement-Level Concurrency
+        var numbers = new List<Int>();
+        var squares = new List<Int>();
+        numbers.add(1); numbers.add(2); numbers.add(3);
+
+        FORALL (i in numbers) {
+            squares[i] = numbers[i] * numbers[i];
+        }
+
+        // 9. Closures and First-Class Functions
+        var makeAdder = function(in x: Int) {
+            return function(y: Int) {
+                return x + y;
+            };
+        };
+
+        var add10 = makeAdder(10);
+        print("Closure Result: " + add10(5)); // Output: 15
+
+        // 10. Safe Selection (No fall-through)
+        var status = 1;
+        switch (status) {
+            case 1:
+                print("Status Active");
+                break;
+            case 2:
+                print("Status Inactive");
+                break;
+            default:
+                print("Unknown Status");
+                break;
+        }
+    }
+}

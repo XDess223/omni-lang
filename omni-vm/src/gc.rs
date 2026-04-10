@@ -12,6 +12,8 @@
 //   - No dangling pointers: the GC holds sole ownership of all heap objects.
 
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::atomic::AtomicI32;
 
 // ── Heap Value ────────────────────────────────────────────────────────────────
 
@@ -25,8 +27,8 @@ pub enum Value {
     Null,
     /// A heap-allocated object identified by its GC handle.
     Object(HeapHandle),
-    /// A compiled closure identified by its chunk key.
-    Closure(String),
+    /// A compiled closure identified by its chunk key, captured environment, and param base slot.
+    Closure(String, Vec<Value>, u16),
 }
 
 /// A u32 index into the GC's heap arena.
@@ -39,8 +41,12 @@ pub struct HeapObject {
     pub class_name: String,
     /// Named fields.
     pub fields: HashMap<String, Value>,
+    /// Native array back-end for List<T>.
+    pub elements: Option<Vec<Value>>,
     /// GC mark bit — set to `true` during the mark phase, cleared before each cycle.
     pub marked: bool,
+    /// Intrinsic lock for monitor blocks. -1 if free, otherwise thread ID of owner.
+    pub lock_owner: Arc<AtomicI32>,
 }
 
 // ── Garbage Collector ─────────────────────────────────────────────────────────
@@ -84,10 +90,18 @@ impl GarbageCollector {
     pub fn allocate(&mut self, class_name: &str) -> HeapHandle {
         self.live_count += 1;
 
+        let elements = if class_name == "List" {
+            Some(Vec::new())
+        } else {
+            None
+        };
+
         let obj = HeapObject {
             class_name: class_name.to_string(),
             fields: HashMap::new(),
+            elements,
             marked: false,
+            lock_owner: Arc::new(AtomicI32::new(-1)),
         };
 
         if let Some(slot) = self.free_list.pop() {
@@ -121,6 +135,22 @@ impl GarbageCollector {
         self.marking_in_progress = true;
     }
 
+    pub fn mark_value(&mut self, val: &Value) {
+        if let Value::Object(h) = val {
+            self.mark_worklist.push(*h);
+        } else if let Value::Closure(_name, env, _base) = val {
+            for v in env {
+                self.mark_value(v);
+            }
+        }
+    }
+
+    pub fn collect_garbage(&mut self) {
+        if self.mark_step() {
+            self.sweep();
+        }
+    }
+
     /// Perform one incremental marking step — processes up to `mark_slice_size`
     /// objects. Returns `true` when the full mark phase is complete.
     pub fn mark_step(&mut self) -> bool {
@@ -138,9 +168,18 @@ impl GarbageCollector {
                 obj.marked = true;
 
                 // Gray all referenced child objects (follow field pointers).
-                let children: Vec<HeapHandle> = obj.fields.values()
+                let mut children: Vec<HeapHandle> = obj.fields.values()
                     .filter_map(|v| if let Value::Object(h) = v { Some(*h) } else { None })
                     .collect();
+                
+                // Trace elements if it's a List
+                if let Some(ref elements) = obj.elements {
+                    let elem_children: Vec<HeapHandle> = elements.iter()
+                        .filter_map(|v| if let Value::Object(h) = v { Some(*h) } else { None })
+                        .collect();
+                    children.extend(elem_children);
+                }
+
                 self.mark_worklist.extend(children);
             }
         }

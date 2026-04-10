@@ -10,6 +10,7 @@ use crate::bytecode::{Chunk, CompiledProgram, Instruction};
 
 // ── Local variable slot allocator ─────────────────────────────────────────────
 
+#[derive(Clone)]
 struct Locals {
     /// Maps variable name → slot index.
     slots: Vec<HashMap<String, u16>>,
@@ -102,7 +103,14 @@ impl CodeGen {
         if chunk.code.last() != Some(&Instruction::Return)
             && chunk.code.last() != Some(&Instruction::ReturnValue)
         {
-            chunk.emit(Instruction::Return, 0);
+            if method.name == self.current_class {
+                // Constructors implicitly return `this` (local 0)
+                chunk.emit(Instruction::LoadLocal(0), 0);
+                chunk.emit(Instruction::ReturnValue, 0);
+            } else {
+                chunk.emit(Instruction::PushNull, 0);
+                chunk.emit(Instruction::ReturnValue, 0);
+            }
         }
 
         chunk
@@ -174,36 +182,67 @@ impl CodeGen {
 
             // foreach (var in collection) { body }
             // EBNF: <iteration_stmt> → foreach (<id> in <collection>) <block>
-            Stmt::Foreach { var, collection, body } => {
+            Stmt::Foreach { var: _, collection, body } => {
                 self.gen_expr(collection, chunk, locals);
                 let col_slot = locals.declare("__foreach_col__");
                 chunk.emit(Instruction::StoreLocal(col_slot), 0);
-
-                // Emit a ForallBegin hint for the VM's iterator protocol.
-                // In full implementation this becomes an iterator object call.
-                let var_slot = locals.declare(var);
-                chunk.emit(Instruction::ForallBegin {
-                    local_slot: var_slot,
-                    collection_slot: col_slot,
-                }, 0);
-
+                // Foreach currently uses sequential protocol
                 self.gen_block(body, chunk, locals);
-
-                chunk.emit(Instruction::ForallEnd, 0);
             }
 
-            // FORALL (var in collection) { body }  — statement-level concurrency
-            Stmt::Forall { var, collection, body } => {
-                self.gen_expr(collection, chunk, locals);
-                let col_slot = locals.declare("__forall_col__");
-                chunk.emit(Instruction::StoreLocal(col_slot), 0);
-                let var_slot = locals.declare(var);
-                chunk.emit(Instruction::ForallBegin {
-                    local_slot: var_slot,
-                    collection_slot: col_slot,
-                }, 0);
+            // forall (var = start to end) { body }  — statement-level concurrency
+            Stmt::Forall { var, start, end, body } => {
+                self.gen_expr(start, chunk, locals);
+                self.gen_expr(end, chunk, locals);
+                
+                // Compile the body as a closure with 1 parameter (the loop variable)
+                let closure_key = format!(
+                    "{}::__forall_{}__",
+                    self.current_class,
+                    self.output.methods.len()
+                );
+                let mut closure_chunk = Chunk::new();
+                let mut closure_locals = locals.clone();
+                closure_locals.push_scope();
+                closure_locals.declare(var); // The loop index is parameter 0
+
+                for s in body {
+                    self.gen_stmt(s, &mut closure_chunk, &mut closure_locals);
+                }
+                if closure_chunk.code.last() != Some(&Instruction::Return)
+                    && closure_chunk.code.last() != Some(&Instruction::ReturnValue)
+                {
+                    closure_chunk.emit(Instruction::Return, 0);
+                }
+                self.output.methods.insert(closure_key.clone(), closure_chunk);
+                
+                let name_idx = chunk.intern_name(&closure_key);
+                let base_slot = locals.next_slot;
+                chunk.emit(Instruction::MakeClosure { name_idx, base_slot }, 0);
+                chunk.emit(Instruction::ExecuteForall, 0);
+            }
+
+            // monitor (target) { body }
+            Stmt::Monitor { target, body } => {
+                self.gen_expr(target, chunk, locals);
+                let lock_slot = locals.declare("__monitor_lock__");
+                chunk.emit(Instruction::StoreLocal(lock_slot), 0);
+                
+                chunk.emit(Instruction::LoadLocal(lock_slot), 0);
+                chunk.emit(Instruction::MonitorEnter, 0);
+
+                // We protect the block with Try/Finally to ensure MonitorExit
+                let try_begin_idx = chunk.emit(Instruction::TryBegin { handler_ip: 0 }, 0);
                 self.gen_block(body, chunk, locals);
-                chunk.emit(Instruction::ForallEnd, 0);
+                let try_end_idx = chunk.emit(Instruction::TryEnd { past_ip: 0 }, 0);
+                
+                // "Finally" part
+                chunk.patch_jump(try_begin_idx);
+                chunk.emit(Instruction::LoadLocal(lock_slot), 0);
+                chunk.emit(Instruction::MonitorExit, 0);
+                chunk.emit(Instruction::Rethrow, 0); // Propagate if an exception happened
+                
+                chunk.patch_jump(try_end_idx);
             }
 
             // try { } catch (E e) { } finally { }
@@ -219,22 +258,34 @@ impl CodeGen {
                 // Patch TryBegin to point here (start of catch chain).
                 chunk.patch_jump(try_begin_idx);
 
+                let mut catch_end_jumps = Vec::new();
+
                 for catch in catches {
                     let class_idx = chunk.intern_name(&catch.exception_type);
                     let local_slot = locals.declare(&catch.binding);
-                    chunk.emit(Instruction::CatchMatch { class_idx, local_slot }, 0);
+                    let catch_match_idx = chunk.emit(Instruction::CatchMatch { class_idx, local_slot, next_ip: 0 }, 0);
+                    
                     self.gen_block(&catch.body, chunk, locals);
+                    
                     let after_catch = chunk.emit(Instruction::Jump(0), 0);
-                    // Will be patched to jump past finally.
-                    let _ = after_catch; // placeholder — full implementation patches this
+                    catch_end_jumps.push(after_catch);
+                    
+                    // Patch mismatch to start at next catch
+                    chunk.patch_jump(catch_match_idx);
                 }
 
                 chunk.emit(Instruction::Rethrow, 0);
 
-                // Patch TryEnd to point past all catches + rethrow.
+                // Patch all successful catch completions and the normal path TryEnd
+                // to jump here (before finally block).
+                let _finally_start = chunk.current_ip();
                 chunk.patch_jump(try_end_idx);
+                for jump in catch_end_jumps {
+                    chunk.patch_jump(jump);
+                }
 
                 // Finally block (always runs).
+                let _finally_start = chunk.current_ip();
                 if let Some(fb) = finally_block {
                     self.gen_block(fb, chunk, locals);
                 }
@@ -323,18 +374,24 @@ impl CodeGen {
                         chunk.emit(Instruction::InvokeVirtual { name_idx: nidx, argc }, 0);
                     }
                     Expr::Ident(name) => {
-                        let nidx = chunk.intern_name(name);
-                        chunk.emit(Instruction::Call { name_idx: nidx, argc }, 0);
+                        // Let's resolve what 'name' is. If it's a local, it might be a closure!
+                        if let Some(slot) = locals.lookup(name) {
+                            chunk.emit(Instruction::LoadLocal(slot), 0);
+                            chunk.emit(Instruction::CallClosure { argc }, 0);
+                        } else {
+                            // Implicit `this.field` closure OR global function
+                            let nidx = chunk.intern_name(name);
+                            chunk.emit(Instruction::Call { name_idx: nidx, argc }, 0);
+                        }
                     }
                     _ => {
                         self.gen_expr(callee, chunk, locals);
-                        let nidx = chunk.intern_name("__closure__");
-                        chunk.emit(Instruction::Call { name_idx: nidx, argc }, 0);
+                        chunk.emit(Instruction::CallClosure { argc }, 0);
                     }
                 }
             }
 
-            Expr::New { class_name, args } => {
+            Expr::New { class_name, type_args: _, args } => {
                 for arg in args { self.gen_expr(arg, chunk, locals); }
                 let class_idx = chunk.intern_name(class_name);
                 let argc = args.len() as u8;
@@ -363,10 +420,13 @@ impl CodeGen {
             }
 
             Expr::UnaryOp { op, operand } => {
+                if matches!(op, UnaryOp::Neg) {
+                    chunk.emit(Instruction::PushInt(0), 0);
+                }
                 self.gen_expr(operand, chunk, locals);
                 let instr = match op {
                     UnaryOp::Not => Instruction::Not,
-                    UnaryOp::Neg => Instruction::SubInt, // VM handles negation via sub from 0
+                    UnaryOp::Neg => Instruction::SubInt,
                 };
                 chunk.emit(instr, 0);
             }
@@ -380,7 +440,9 @@ impl CodeGen {
                     self.output.methods.len()
                 );
                 let mut closure_chunk = Chunk::new();
-                let mut closure_locals = Locals::new();
+                let mut closure_locals = locals.clone(); // inherit parent environment
+                closure_locals.push_scope();
+                
                 for p in params {
                     closure_locals.declare(&p.name);
                 }
@@ -393,9 +455,10 @@ impl CodeGen {
                     closure_chunk.emit(Instruction::Return, 0);
                 }
                 self.output.methods.insert(closure_key.clone(), closure_chunk);
-                // Push the key string so the VM can look up the closure chunk.
-                let idx = chunk.intern_string(&closure_key);
-                chunk.emit(Instruction::PushString(idx), 0);
+                // Push the closure onto the VM stack via MakeClosure
+                let name_idx = chunk.intern_name(&closure_key);
+                let base_slot = locals.next_slot;
+                chunk.emit(Instruction::MakeClosure { name_idx, base_slot }, 0);
             }
         }
     }

@@ -1,0 +1,20 @@
+interface IProcessable {
+    function process();
+}
+
+class Robot implements IProcessable {
+    public function process() {
+        print("Robot processing data...");
+    }
+}
+
+class MissingMethods implements IProcessable {
+    public function process() {}
+}
+
+class Main {
+    public function main() {
+        var r = new Robot();
+        r.process();
+    }
+}

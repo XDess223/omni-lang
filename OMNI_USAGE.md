@@ -1,222 +1,126 @@
-# Omni Programming Language — Usage Guide
+# 🚀 Omni Language: From 0 to Pro
 
-Omni is a high-performance, hybrid programming language designed for reliability, concurrency, and safety. It features a strict nominal type system, built-in null safety, and an incremental mark-sweep garbage collector.
+Omni is a state-of-the-art programming language built for **safety**, **concurrency**, and **performance**. This guide will take you from your first "Hello World" to architecting high-performance parallel systems.
 
 ---
 
-## 🚀 Getting Started
+## 🟢 Level 0: The Basics
 
-Omni is implemented as a Rust-based toolchain. To use the compiler and virtual machine, ensure you have [Rust](https://www.rust-lang.org/) installed.
+### 1. Hello World
+The entry point is a class named `Main` with a `main` method.
 
-### Project Structure
-- `omni-compiler`: Lexer, Parser, Semantic Analyzer, and Bytecode Generator.
-- `omni-vm`: Stack-based Virtual Machine and Incremental Garbage Collector.
-
-### Running Tests (Development)
-To verify the installation and see the compiler/VM in action:
-```powershell
-# Run all tests in the workspace
-cargo test --workspace
+```omni
+class Main {
+    public function main() {
+        print("Hello, Omni!");
+    }
+}
 ```
 
-## 💻 Command Line Interface (CLI)
+### 2. Variables & Types
+Omni has a strong, nominal type system.
 
-Omni comes with a built-in CLI tool. To use it globally, install it via Cargo:
+```omni
+var x : Int = 42;
+var pi : Float = 3.14;
+var name = "Omni"; // Type inference handles this
+```
 
+---
+
+## 🟡 Level 1: Reliability & Safety
+
+### 3. Null Safety
+Omni is null-safe by default. You cannot assign `null` to a standard type. Use `?` for optionals.
+
+```omni
+var safe : String = null;    // ❌ Error!
+var maybe : String? = null;  // ✅ OK
+```
+
+### 4. Method Modes (`in`)
+Protect your objects from accidental mutation. `in` parameters are read-only views.
+
+```omni
+public function show(in user: User) {
+    user.name = "New"; // ❌ Error: 'in' parameters are immutable!
+}
+```
+
+---
+
+## 🟠 Level 2: Modern Patterns
+
+### 5. Generics
+Write reusable code with `List<T>`.
+
+```omni
+var list = new List<String>();
+list.add("First");
+var item : String = list.get(0);
+```
+
+### 6. Higher-Order Functions
+Functions are first-class. Pass them around easily.
+
+```omni
+public function runTwice(in task: () -> Void) {
+    task();
+    task();
+}
+
+runTwice(() => print("Done!"));
+```
+
+---
+
+## 🔴 Level 3: Professional Concurrency
+
+### 7. Statements-Level Parallelism (`forall`)
+Don't just loop — parallelize. `forall` runs iterations across all available CPU cores.
+
+```omni
+forall (i = 0 to items.size()) {
+    processLargeDataset(items.get(i));
+}
+```
+
+### 8. Synchronization (`monitor`)
+Safe shared state is achieved via `monitor` blocks. They are ultra-lightweight and lock-free where possible.
+
+```omni
+class Counter {
+    private var count = 0;
+    public function inc() {
+        monitor(this) {
+            count = count + 1;
+        }
+    }
+}
+```
+
+---
+
+## ⚙️ The Toolchain
+
+### Installing
 ```powershell
 cargo install --path omni-cli --locked
 ```
 
-### CLI Commands
-
+### Running
 ```powershell
-# Type-check a file (no execution)
-omni check my_program.omni
-
-# Compile and run a file
-omni run my_program.omni
-
-# Show help
-omni help
+omni run your_file.omni
 ```
 
----
-
-## 🛠️ Language Syntax
-
-### 1. Class Definitions
-Classes are the primary unit of organization. They support inheritance and interface implementation.
-
-```omni
-class Student extends Person implements IPrintable {
-    private var name : String ;
-    private var grade : Int ;
-
-    // Constructor
-    public Student(in n : String, in g : Int) {
-        name = n;
-        grade = g;
-    }
-
-    public function getGrade() : Int {
-        return grade;
-    }
-}
-```
-
-### 2. Variables and Type Inference
-You can explicitly declare types or let the compiler infer them.
-
-```omni
-var x : Int = 10;      // Explicit
-var y = 20;            // Inferred as Int
-var msg = "Hello";     // Inferred as String
-```
-
-### 3. Null Safety
-Omni is null-safe by default. Use the `?` modifier to allow a variable to hold `null`.
-
-```omni
-var name : String = null;     // ❌ COMPILE ERROR
-var name : String ? = null;   // ✅ OK (Optional Type)
-```
-
-### 4. Method Modes (`in` parameters)
-Parameters marked with `in` are read-only views. The compiler prevents any mutation of these objects within the method.
-
-```omni
-public function process(in data : Config) {
-    data.value = 10; // ❌ COMPILE ERROR: Mutation of read-only parameter
-}
-```
-
-### 5. Control Flow
-Standard `if-else` and a powerful iterator-based `foreach`.
-
-```omni
-if (score > 90) {
-    print("A");
-} else {
-    print("B");
-}
-
-foreach (item in collection) {
-    item.process();
-}
-```
-
-### 6. Exception Handling
-Checked exceptions must be caught or declared in the method signature.
-
-```omni
-public function load() throws IoException {
-    try {
-        file.open();
-    } catch (IoException e) {
-        log("Failed to open file");
-        throw e;
-    } finally {
-        cleanup();
-    }
-}
-```
-
----
-
-## 📦 Compilation & Execution Workflow
-
-The compiler transforms Omni source code into **Omni Bytecode**, which is then executed by the VM.
-
-### 1. Lexing & Parsing
-The compiler ensures the code conforms to the Omni EBNF grammar and enforces naming conventions (Classes must be `Capitalized`, variables `lowercase`).
-
-### 2. Semantic Analysis
-Omni performs deep analysis to verify:
-- Nominal type equivalence.
-- Purity of `in` parameters.
-- Exception handling completeness.
-
-### 3. Virtual Machine (VM)
-The VM uses a stack-based architecture.
-- **Operand Stack**: For intermediate calculations.
-- **Call Stack**: Managed via `CallFrame` structures.
-- **Garbage Collection**: An **Incremental Mark-Sweep GC** runs in the background, minimizing "stop-the-world" pauses.
-
----
-
-## 📝 Example: Hello World
-
-The entry point for the Omni Virtual Machine is the `main` method of a class named `Main`.
-
-**Create a file named `hello.omni`:**
-
-```omni
-class Main {
-    public function main() {
-        var greeting = "Hello, Omni!";
-        print(greeting);
-    }
-}
-```
-
-**Run it via the CLI:**
+### Checking (Static Analysis)
 ```powershell
-omni run hello.omni
-```
-
-**Expected Output:**
-```
-▶  Running 'Main::main' …
-
-Hello, Omni!
-
-✅  Program completed.
-```
-
-## 📚 Example: Student Grade Tracker
-
-**Create a file named `student.omni`:**
-
-```omni
-class Student {
-    private var name : String ;
-    private var grade : Int ;
-
-    public Student(in n : String, in g : Int) {
-        name = n;
-        grade = g;
-    }
-
-    public function getGrade() : Int {
-        return grade;
-    }
-
-    public function describe() {
-        print(name);
-    }
-}
-
-class Main {
-    public function main() {
-        var student = new Student("Alice", 95);
-        
-        if (student.getGrade() >= 90) {
-            print("Excellent result!");
-        }
-
-        student.describe();
-    }
-}
-```
-
-**Run it:**
-```powershell
-omni run student.omni
+omni check your_file.omni
 ```
 
 ---
 
-## 🛡️ Design Principles
-- **No Goto**: Forbidden at the lexical level.
-- **Nominal Equivalence**: Two shapes are only equal if their type *names* match.
-- **Memory Safety**: No dangling pointers or manual memory management.
+## 🛡️ Omni Philosophy
+1. **Safety First**: Null-safe, Memory-safe, Thread-safe.
+2. **Readability**: Nominal types and explicit modes make code self-documenting.
+3. **Power**: High-level concurrency with low-level VM performance.

@@ -56,14 +56,18 @@ pub enum Instruction {
     Call { name_idx: u32, argc: u8 },
     /// Call a virtual method on `self` (top of stack = receiver), dispatch by name.
     InvokeVirtual { name_idx: u32, argc: u8 },
+    /// Call a closure value popped from the stack.
+    CallClosure { argc: u8 },
     /// Return from the current call frame (no value).
     Return,
     /// Return the top-of-stack value from the current call frame.
     ReturnValue,
 
-    // ── Object Lifecycle ─────────────────────────────────────────────────
+    // ── Object / Closure Lifecycle ───────────────────────────────────────
     /// Allocate a new heap object by class name index, call constructor with argc args.
     New { class_idx: u32, argc: u8 },
+    /// Create a closure binding the current local frame environment to the target anonymous method.
+    MakeClosure { name_idx: u32, base_slot: u16 },
 
     // ── Exception Handling ────────────────────────────────────────────────
     /// Mark the beginning of a protected try region.
@@ -72,22 +76,21 @@ pub enum Instruction {
     /// End the try region (normal path — jump past all catch blocks).
     TryEnd { past_ip: u32 },
     /// Check the top-of-stack exception against a class name.
-    /// If it matches, bind to a local slot and continue; else re-raise.
-    CatchMatch { class_idx: u32, local_slot: u16 },
+    /// If it matches, bind to a local slot and continue; else jump to next_ip.
+    CatchMatch { class_idx: u32, local_slot: u16, next_ip: u32 },
     /// Re-raise the current exception if it was not matched.
     Rethrow,
     /// Throw the exception at the top of the stack.
     Throw,
 
-    // ── Concurrency Stubs (wired to VM Monitor primitives) ────────────────
+    // ── Concurrency (Parallelism & Monitors) ─────────────────────────────
     /// Acquire the monitor lock on the object at top-of-stack.
     MonitorEnter,
     /// Release the monitor lock on the object at top-of-stack.
     MonitorExit,
 
-    /// Placeholder: FORALL emits a parallel dispatch hint to the VM scheduler.
-    ForallBegin { local_slot: u16, collection_slot: u16 },
-    ForallEnd,
+    /// Execute a parallel range loop. Pops: end, start, closure.
+    ExecuteForall,
 
     // ── Misc ──────────────────────────────────────────────────────────────
     /// No-operation (used for patching jump targets during code generation).
@@ -156,6 +159,7 @@ impl Chunk {
             Instruction::JumpIfTrue(ip)  => *ip = target,
             Instruction::TryBegin { handler_ip } => *handler_ip = target,
             Instruction::TryEnd { past_ip }      => *past_ip = target,
+            Instruction::CatchMatch { next_ip, .. } => *next_ip = target,
             _ => {}
         }
     }
@@ -167,7 +171,7 @@ impl Chunk {
 }
 
 /// The full compiled output of one Omni source file.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct CompiledProgram {
     /// One chunk per method (keyed as "ClassName::method_name").
     pub methods: std::collections::HashMap<String, Chunk>,

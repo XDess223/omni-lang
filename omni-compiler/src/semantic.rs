@@ -31,6 +31,10 @@ pub enum SemanticError {
     TypeMismatch { expected: String, found: String },
     /// A class body referenced an undeclared super-class.
     UndeclaredSuperClass(String),
+    /// A class referenced an undeclared interface.
+    UndeclaredInterface(String),
+    /// A class claims to implement an interface but is missing a method.
+    InterfaceMissingMethod { class: String, interface: String, method: String },
 }
 
 // ── Analyzer state ────────────────────────────────────────────────────────
@@ -61,6 +65,20 @@ impl Analyzer {
     // ── Entry point ───────────────────────────────────────────────────────
 
     pub fn analyze(&mut self, program: &Program) {
+        // Pass 0: register all interfaces.
+        for iface in &program.interfaces {
+            let declared = self.table.declare(Symbol {
+                name: iface.name.clone(),
+                ty: OmniType::Interface(iface.name.clone()),
+                kind: SymbolKind::Interface {
+                    extends: iface.extends.clone(),
+                },
+            });
+            if !declared {
+                self.errors.push(SemanticError::DuplicateDeclaration(iface.name.clone()));
+            }
+        }
+
         // First pass: register all class names so forward references work.
         for class in &program.classes {
             let declared = self.table.declare(Symbol {
@@ -79,6 +97,32 @@ impl Analyzer {
         // Second pass: analyze class bodies.
         for class in &program.classes {
             self.analyze_class(class);
+        }
+
+        // Third pass: check interface compliance
+        for class in &program.classes {
+            for iface_name in &class.implements {
+                if !self.table.is_declared(iface_name) {
+                    self.errors.push(SemanticError::UndeclaredInterface(iface_name.clone()));
+                    continue;
+                }
+                if let Some(iface) = program.interfaces.iter().find(|i| &i.name == iface_name) {
+                    for required_method in &iface.methods {
+                        // Check if class has this method
+                        let has_method = class.members.iter().any(|m| match m {
+                            ClassMember::Method(_, mdef) => mdef.name == required_method.name,
+                            _ => false,
+                        });
+                        if !has_method {
+                            self.errors.push(SemanticError::InterfaceMissingMethod {
+                                class: class.name.clone(),
+                                interface: iface_name.clone(),
+                                method: required_method.name.clone(),
+                            });
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -122,7 +166,7 @@ impl Analyzer {
                     if !declared {
                         self.errors.push(SemanticError::DuplicateDeclaration(method.name.clone()));
                     }
-                    self.analyze_method(method);
+                    self.analyze_method(method, &class.name);
                 }
             }
         }
@@ -132,10 +176,17 @@ impl Analyzer {
 
     // ── Method analysis ───────────────────────────────────────────────────
 
-    fn analyze_method(&mut self, method: &MethodDef) {
+    fn analyze_method(&mut self, method: &MethodDef, class_name: &str) {
         self.current_method_throws = method.throws.clone();
         self.in_mode_params.clear();
         self.table.push_scope();
+        
+        // Declare 'this' parameter implicitly.
+        self.table.declare(Symbol {
+            name: "this".to_string(),
+            ty: OmniType::Class(class_name.to_string()),
+            kind: SymbolKind::Variable,
+        });
 
         // Declare all parameters in the method scope.
         for param in &method.params {
@@ -171,7 +222,9 @@ impl Analyzer {
 
             Stmt::Assign { target, value } => {
                 // Enforce in-mode: a parameter marked `in` cannot be assigned.
+                let mut target_name = String::new();
                 if let Expr::Ident(name) = target {
+                    target_name = name.clone();
                     if self.in_mode_params.contains(name) {
                         self.errors.push(SemanticError::InModeViolation {
                             param: name.clone(),
@@ -179,9 +232,24 @@ impl Analyzer {
                         });
                     }
                 }
-                let _ltype = self.analyze_expr(target);
-                let _rtype = self.analyze_expr(value);
-                // Full type-mismatch check would compare ltype vs rtype here.
+                
+                let ltype = self.analyze_expr(target);
+                let rtype = self.analyze_expr(value);
+                
+                // Null safety checks inside assignments.
+                if let Expr::Null = value {
+                    if !ltype.is_nullable() {
+                        self.errors.push(SemanticError::NullToNonOptional {
+                            var: target_name,
+                            ty: ltype.to_string(),
+                        });
+                    }
+                } else if rtype != OmniType::Inferred && ltype != OmniType::Inferred && !ltype.is_compatible_with(&rtype) {
+                     self.errors.push(SemanticError::TypeMismatch {
+                         expected: ltype.to_string(),
+                         found: rtype.to_string(),
+                     });
+                }
             }
 
             Stmt::Return(expr) => {
@@ -200,6 +268,8 @@ impl Analyzer {
                 if let Some(eb) = else_block { self.analyze_block(eb); }
             }
 
+            // foreach (var in collection) { body }
+            // EBNF: <iteration_stmt> → foreach (<id> in <collection>) <block>
             Stmt::Foreach { var, collection, body } => {
                 let _col_ty = self.analyze_expr(collection);
                 self.table.push_scope();
@@ -209,12 +279,18 @@ impl Analyzer {
                 self.table.pop_scope();
             }
 
-            Stmt::Forall { var, collection, body } => {
-                let _col_ty = self.analyze_expr(collection);
+            Stmt::Forall { var, start, end, body } => {
+                let _s_ty = self.analyze_expr(start);
+                let _e_ty = self.analyze_expr(end);
                 self.table.push_scope();
-                self.table.declare_var(var, OmniType::Inferred);
+                self.table.declare_var(var, OmniType::Int);
                 for s in body { self.analyze_stmt(s); }
                 self.table.pop_scope();
+            }
+
+            Stmt::Monitor { target, body } => {
+                let _ty = self.analyze_expr(target);
+                for s in body { self.analyze_stmt(s); }
             }
 
             Stmt::TryCatch { try_block, catches, finally_block } => {
@@ -359,8 +435,8 @@ impl Analyzer {
                 OmniType::Inferred
             }
 
-            Expr::New { class_name, args } => {
-                if !self.table.is_declared(class_name) {
+            Expr::New { class_name, type_args: _, args } => {
+                if class_name != "List" && !self.table.is_declared(class_name) {
                     self.errors.push(SemanticError::Undeclared(class_name.clone()));
                 }
                 for arg in args { self.analyze_expr(arg); }
@@ -421,7 +497,12 @@ impl Analyzer {
             Expr::StringLit(_) => OmniType::Str,
             Expr::BoolLit(_)   => OmniType::Bool,
             Expr::Null         => OmniType::Optional(Box::new(OmniType::Inferred)),
-            Expr::New { class_name, .. } => OmniType::Class(class_name.clone()),
+            Expr::New { class_name, type_args, .. } => {
+                let resolved_args: Vec<OmniType> = type_args.iter()
+                    .map(|ta| self.resolve_type_expr(ta))
+                    .collect();
+                OmniType::from_name(class_name, resolved_args, false)
+            }
             _ =>  OmniType::Inferred,
         }
     }
@@ -429,8 +510,25 @@ impl Analyzer {
     // ── Type expression resolver ──────────────────────────────────────────
 
     pub fn resolve_type_expr(&self, te: &TypeExpr) -> OmniType {
-        let args: Vec<OmniType> =
-            te.type_args.iter().map(|a| self.resolve_type_expr(a)).collect();
-        OmniType::from_name(&te.name, args, te.optional)
+        match te {
+            TypeExpr::Named { name, type_args, optional } => {
+                let args: Vec<OmniType> =
+                    type_args.iter().map(|a| self.resolve_type_expr(a)).collect();
+                OmniType::from_name(name, args, *optional)
+            }
+            TypeExpr::Function { params, return_type, optional } => {
+                let param_types = params.iter().map(|p| self.resolve_type_expr(p)).collect();
+                let ret_ty = self.resolve_type_expr(return_type);
+                let func_ty = OmniType::Function {
+                    param_types,
+                    return_type: Box::new(ret_ty),
+                };
+                if *optional {
+                    OmniType::Optional(Box::new(func_ty))
+                } else {
+                    func_ty
+                }
+            }
+        }
     }
 }

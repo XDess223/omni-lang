@@ -60,31 +60,40 @@ impl Parser {
     }
 
     fn expect_ident(&mut self) -> Result<String, ParseError> {
-        let st = self.current().clone();
-        match &st.token {
-            Token::Ident(name) => { let n = name.clone(); self.advance(); Ok(n) }
-            Token::ClassIdent(name) => { let n = name.clone(); self.advance(); Ok(n) }
-            _ => Err(ParseError::UnexpectedToken {
-                expected: "identifier",
-                found: st.token.clone(),
-                line: st.span.line,
-                col: st.span.col,
-            })
+        let mut name = String::new();
+        loop {
+            let st = self.current().clone();
+            match &st.token {
+                Token::Ident(n) | Token::ClassIdent(n) => {
+                    name.push_str(n);
+                    self.advance();
+                }
+                _ => return Err(ParseError::UnexpectedToken {
+                    expected: "identifier",
+                    found: st.token.clone(),
+                    line: st.span.line,
+                    col: st.span.col,
+                })
+            }
+            if *self.peek() == Token::DoubleColon {
+                self.advance();
+                name.push_str("::");
+            } else {
+                break;
+            }
         }
+        Ok(name)
     }
 
     fn expect_class_ident(&mut self) -> Result<String, ParseError> {
         let st = self.current().clone();
-        match &st.token {
-            Token::ClassIdent(name) => { let n = name.clone(); self.advance(); Ok(n) }
-            Token::Ident(name) => Err(ParseError::NamingViolation {
-                message: format!("Class name '{}' must start with an uppercase letter", name),
-                line: st.span.line,
-                col: st.span.col,
-            }),
-            _ => Err(ParseError::UnexpectedToken {
-                expected: "class name (uppercase)",
-                found: st.token.clone(),
+        let name = self.expect_ident()?;
+        let last_segment = name.split("::").last().unwrap();
+        if last_segment.chars().next().unwrap().is_uppercase() {
+            Ok(name)
+        } else {
+            Err(ParseError::NamingViolation {
+                message: format!("Class name '{}' must end with an uppercase segment", name),
                 line: st.span.line,
                 col: st.span.col,
             })
@@ -115,6 +124,7 @@ impl Parser {
     pub fn parse_program(&mut self) -> Result<Program, ParseError> {
         let mut imports = Vec::new();
         let mut namespace = None;
+        let mut interfaces = Vec::new();
         let mut classes = Vec::new();
 
         // import declarations
@@ -133,12 +143,95 @@ impl Parser {
             namespace = Some(name);
         }
 
-        // Class definitions
+        // Class and Interface definitions
         while *self.peek() != Token::Eof {
-            classes.push(self.parse_class_def()?);
+            if *self.peek() == Token::Interface {
+                interfaces.push(self.parse_interface_def()?);
+            } else {
+                classes.push(self.parse_class_def()?);
+            }
         }
 
-        Ok(Program { imports, namespace, classes })
+        Ok(Program { imports, namespace, interfaces, classes })
+    }
+
+    // ── EBNF: <interface_def> ────────────────────────────────────────────
+    // <interface_def> → interface <id> [extends <ident_list>] '{' { <method_decl> } '}'
+
+    fn parse_interface_def(&mut self) -> Result<InterfaceDef, ParseError> {
+        self.expect(Token::Interface, "'interface'")?;
+        let name = self.expect_class_ident()?;
+
+        let mut type_params = Vec::new();
+        if *self.peek() == Token::LAngle {
+            self.advance();
+            loop {
+                let param_name = self.expect_ident()?;
+                let mut bound = None;
+                if *self.peek() == Token::Extends {
+                    self.advance();
+                    bound = Some(self.expect_class_ident()?);
+                }
+                type_params.push(TypeParam { name: param_name, bound });
+
+                if *self.peek() == Token::Comma {
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+            self.expect(Token::RAngle, "'>'")?;
+        }
+
+        let extends = if *self.peek() == Token::Extends {
+            self.advance();
+            self.parse_ident_list()?
+        } else {
+            Vec::new()
+        };
+
+        self.expect(Token::LBrace, "'{'")?;
+        let mut methods = Vec::new();
+        while *self.peek() != Token::RBrace && *self.peek() != Token::Eof {
+            methods.push(self.parse_method_decl()?);
+        }
+        self.expect(Token::RBrace, "'}'")?;
+
+        Ok(InterfaceDef { name, type_params, extends, methods })
+    }
+
+    fn parse_method_decl(&mut self) -> Result<MethodDecl, ParseError> {
+        if *self.peek() == Token::Public {
+            self.advance();
+        }
+        self.expect(Token::Function, "'function'")?;
+        let name = self.expect_ident()?;
+
+        self.expect(Token::LParen, "'('")?;
+        let params = if *self.peek() != Token::RParen {
+            self.parse_param_list()?
+        } else {
+            Vec::new()
+        };
+        self.expect(Token::RParen, "')'")?;
+
+        let return_type = if *self.peek() == Token::Colon {
+            self.advance();
+            Some(self.parse_type_expr()?)
+        } else {
+            None
+        };
+
+        let throws = if *self.peek() == Token::Throws {
+            self.advance();
+            self.parse_ident_list()?
+        } else {
+            Vec::new()
+        };
+
+        self.expect(Token::Semicolon, "';' after interface method declaration")?;
+
+        Ok(MethodDecl { name, params, throws, return_type })
     }
 
     // ── EBNF: <class_def> ────────────────────────────────────────────────
@@ -148,6 +241,29 @@ impl Parser {
     fn parse_class_def(&mut self) -> Result<ClassDef, ParseError> {
         self.expect(Token::Class, "'class'")?;
         let name = self.expect_class_ident()?;
+
+        let mut type_params = Vec::new();
+        if *self.peek() == Token::LAngle {
+            self.advance();
+            loop {
+                // e.g. T
+                let param_name = self.expect_ident()?;
+                let mut bound = None;
+                // [extends Comparable]
+                if *self.peek() == Token::Extends {
+                    self.advance();
+                    bound = Some(self.expect_class_ident()?);
+                }
+                type_params.push(TypeParam { name: param_name, bound });
+
+                if *self.peek() == Token::Comma {
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+            self.expect(Token::RAngle, "'>'")?;
+        }
 
         let extends = if *self.peek() == Token::Extends {
             self.advance();
@@ -170,7 +286,7 @@ impl Parser {
         }
         self.expect(Token::RBrace, "'}'")?;
 
-        Ok(ClassDef { name, extends, implements, members })
+        Ok(ClassDef { name, type_params, extends, implements, members })
     }
 
     // ── EBNF: <class_member> ─────────────────────────────────────────────
@@ -304,6 +420,7 @@ impl Parser {
             Token::Forall  => self.parse_forall_stmt(),
             Token::Try     => self.parse_try_stmt(),
             Token::Throw   => self.parse_throw_stmt(),
+            Token::Monitor => self.parse_monitor_stmt(),
             _              => self.parse_expr_or_assign_stmt(),
         }
     }
@@ -324,14 +441,8 @@ impl Parser {
         if *self.peek() == Token::Colon {
             // Explicit type declaration
             self.advance();
-            let mut ty = self.parse_type_expr()?;
-            let optional = if *self.peek() == Token::Question {
-                self.advance();
-                ty.optional = true;
-                true
-            } else {
-                false
-            };
+            let ty = self.parse_type_expr()?;
+            let optional = ty.is_optional();
             let initializer = if *self.peek() == Token::Assign {
                 self.advance();
                 Some(self.parse_expr()?)
@@ -388,14 +499,16 @@ impl Parser {
     }
 
     fn parse_forall_stmt(&mut self) -> Result<Stmt, ParseError> {
-        self.advance(); // 'FORALL'
+        self.advance(); // 'forall'
         self.expect(Token::LParen, "'('")?;
         let var = self.expect_var_ident()?;
-        self.expect(Token::In, "'in'")?;
-        let collection = self.parse_expr()?;
+        self.expect(Token::Assign, "'='")?;
+        let start = self.parse_expr()?;
+        self.expect(Token::To, "'to'")?;
+        let end = self.parse_expr()?;
         self.expect(Token::RParen, "')'")?;
         let body = self.parse_block()?;
-        Ok(Stmt::Forall { var, collection, body })
+        Ok(Stmt::Forall { var, start, end, body })
     }
 
     fn parse_try_stmt(&mut self) -> Result<Stmt, ParseError> {
@@ -425,6 +538,15 @@ impl Parser {
         let expr = self.parse_expr()?;
         self.expect(Token::Semicolon, "';' after throw")?;
         Ok(Stmt::Throw(expr))
+    }
+
+    fn parse_monitor_stmt(&mut self) -> Result<Stmt, ParseError> {
+        self.advance(); // 'monitor'
+        self.expect(Token::LParen, "'('")?;
+        let target = self.parse_expr()?;
+        self.expect(Token::RParen, "')'")?;
+        let body = self.parse_block()?;
+        Ok(Stmt::Monitor { target, body })
     }
 
     fn parse_expr_or_assign_stmt(&mut self) -> Result<Stmt, ParseError> {
@@ -589,10 +711,22 @@ impl Parser {
             Token::New => {
                 self.advance();
                 let class_name = self.expect_class_ident()?;
+                
+                let mut type_args = Vec::new();
+                if *self.peek() == Token::LAngle {
+                    self.advance();
+                    type_args.push(self.parse_type_expr()?);
+                    while *self.peek() == Token::Comma {
+                        self.advance();
+                        type_args.push(self.parse_type_expr()?);
+                    }
+                    self.expect(Token::RAngle, "'>'")?;
+                }
+                
                 self.expect(Token::LParen, "'('")?;
                 let args = self.parse_arg_list()?;
                 self.expect(Token::RParen, "')'")?;
-                Ok(Expr::New { class_name, args })
+                Ok(Expr::New { class_name, type_args, args })
             }
             Token::Function => {
                 // Anonymous closure: function(params) { body }
@@ -608,6 +742,37 @@ impl Parser {
                 Ok(Expr::Closure { params, body })
             }
             Token::LParen => {
+                let is_arrow = if self.pos + 1 < self.tokens.len() {
+                    let next_tok = &self.tokens[self.pos + 1].token;
+                    match next_tok {
+                        Token::RParen => true, // `()`
+                        Token::In => true,     // `(in ...`
+                        Token::Ident(_) => {
+                            if self.pos + 2 < self.tokens.len() && self.tokens[self.pos + 2].token == Token::Colon {
+                                true
+                            } else {
+                                false
+                            }
+                        }
+                        _ => false,
+                    }
+                } else {
+                    false
+                };
+                
+                if is_arrow {
+                    self.advance(); // consume '('
+                    let params = if *self.peek() == Token::RParen {
+                        Vec::new()
+                    } else {
+                        self.parse_param_list()?
+                    };
+                    self.expect(Token::RParen, "')'")?;
+                    self.expect(Token::Arrow, "'->'")?;
+                    let body = self.parse_block()?;
+                    return Ok(Expr::Closure { params, body });
+                }
+
                 self.advance();
                 let expr = self.parse_expr()?;
                 self.expect(Token::RParen, "')'")?;
@@ -658,6 +823,29 @@ impl Parser {
     }
 
     fn parse_type_expr(&mut self) -> Result<TypeExpr, ParseError> {
+        // Function type: (T1, T2) -> T3
+        if *self.peek() == Token::LParen {
+            self.advance(); // consume '('
+            let mut params = Vec::new();
+            if *self.peek() != Token::RParen {
+                params.push(self.parse_type_expr()?);
+                while *self.peek() == Token::Comma {
+                    self.advance();
+                    params.push(self.parse_type_expr()?);
+                }
+            }
+            self.expect(Token::RParen, "')'")?;
+            self.expect(Token::Arrow, "'->'")?;
+            let return_type = Box::new(self.parse_type_expr()?);
+            let optional = if *self.peek() == Token::Question {
+                self.advance();
+                true
+            } else {
+                false
+            };
+            return Ok(TypeExpr::Function { params, return_type, optional });
+        }
+
         let name = self.expect_type_name()?;
         let type_args = if *self.peek() == Token::LAngle {
             self.advance();
@@ -677,7 +865,7 @@ impl Parser {
         } else {
             false
         };
-        Ok(TypeExpr { name, type_args, optional })
+        Ok(TypeExpr::Named { name, type_args, optional })
     }
 
     // ── Utilities ─────────────────────────────────────────────────────────

@@ -149,6 +149,7 @@ impl Lexer {
         let tok = match word.as_str() {
             // Keywords
             "class"      => Token::Class,
+            "interface"  => Token::Interface,
             "function"   => Token::Function,
             "var"        => Token::Var,
             "return"     => Token::Return,
@@ -156,7 +157,8 @@ impl Lexer {
             "else"       => Token::Else,
             "foreach"    => Token::Foreach,
             "in"         => Token::In,
-            "FORALL"     => Token::Forall,
+            "to"         => Token::To,
+            "forall"     => Token::Forall,
             "try"        => Token::Try,
             "catch"      => Token::Catch,
             "finally"    => Token::Finally,
@@ -165,6 +167,7 @@ impl Lexer {
             "new"        => Token::New,
             "extends"    => Token::Extends,
             "implements" => Token::Implements,
+            "monitor"    => Token::Monitor,
             "import"     => Token::Import,
             "namespace"  => Token::Namespace,
             "public"     => Token::Public,
@@ -223,6 +226,7 @@ impl Lexer {
                 c if c.is_alphabetic() || c == '_' => self.scan_ident_or_keyword(c)?,
 
                 '+' => Token::Plus,
+                '-' if self.current() == Some('>') => { self.advance(); Token::Arrow }
                 '-' => Token::Minus,
                 '*' => Token::Star,
                 '/' => Token::Slash,
@@ -238,6 +242,7 @@ impl Lexer {
                 '&' if self.current() == Some('&') => { self.advance(); Token::And }
                 '|' if self.current() == Some('|') => { self.advance(); Token::Or }
                 ';' => Token::Semicolon,
+                ':' if self.current() == Some(':') => { self.advance(); Token::DoubleColon }
                 ':' => Token::Colon,
                 ',' => Token::Comma,
                 '.' => Token::Dot,

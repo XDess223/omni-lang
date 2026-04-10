@@ -1,0 +1,20 @@
+// examples/null_safety.omni
+// This file tests the Semantic Analyzer's static null checking.
+
+class Main {
+    public function main() {
+        // VALID declarations
+        var a : String? = null;
+        var b : Int = 10;
+        var c = 15; // Inferred as Int
+
+        // INVALID declarations
+        var invalid_d : String = null;
+
+        // VALID assignment
+        a = "Hello";
+        
+        // INVALID assignment
+        b = null;
+    }
+}

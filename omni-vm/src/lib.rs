@@ -88,10 +88,8 @@ mod tests {
         gen.generate(&program);
 
         let chunk = gen.output.methods.get("Loop::run").expect("chunk missing");
-        assert!(chunk.code.iter().any(|i| matches!(i, Instruction::ForallBegin { .. })),
-            "Missing ForallBegin");
-        assert!(chunk.code.iter().any(|i| matches!(i, Instruction::ForallEnd)),
-            "Missing ForallEnd");
+        assert!(chunk.code.iter().any(|i| matches!(i, Instruction::ExecuteForall)),
+            "Missing ExecuteForall instruction");
     }
 
     /// Verify try-catch emits TryBegin / TryEnd instructions.

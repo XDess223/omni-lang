@@ -22,6 +22,9 @@ pub enum OmniType {
     // ── User-defined class (resolved by name === nominal equivalence) ─
     Class(String),
 
+    // ── User-defined interface
+    Interface(String),
+
     // ── Generic instantiation: e.g. List<Student> ────────────────────
     Generic { base: String, params: Vec<OmniType> },
 
@@ -42,6 +45,7 @@ impl fmt::Display for OmniType {
             OmniType::Void          => write!(f, "Void"),
             OmniType::Optional(t)   => write!(f, "{}?", t),
             OmniType::Class(name)   => write!(f, "{}", name),
+            OmniType::Interface(name)=> write!(f, "{}", name),
             OmniType::Inferred      => write!(f, "<inferred>"),
             OmniType::Generic { base, params } => {
                 write!(f, "{}<", base)?;
@@ -84,9 +88,28 @@ impl OmniType {
     }
 
     /// Nominal type equivalence: strict name matching.
-    /// `Optional<Int>` is NOT compatible with `Int`.
+    /// `Optional<Int>` is NOT compatible with `Int`, but `Int` IS compatible with `Optional<Int>`.
     pub fn is_compatible_with(&self, other: &OmniType) -> bool {
-        self == other
+        if self == other {
+            return true;
+        }
+        // Allow assigning T into Optional<T>
+        if let OmniType::Optional(inner) = self {
+            if inner.as_ref() == other { return true; }
+        }
+        // Allow Function inferred return assignment
+        if let (OmniType::Function { param_types: p1, return_type: r1 },
+                OmniType::Function { param_types: p2, return_type: r2 }) = (self, other) {
+            if p1 == p2 {
+                if **r2 == OmniType::Inferred {
+                    return true;
+                }
+                if r1 == r2 {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     /// Returns true if the type can legally hold null/None.

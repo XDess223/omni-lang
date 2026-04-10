@@ -1,0 +1,16 @@
+import System::IO;
+
+namespace MyProject::Model;
+
+class System::IO::Console {
+    public function writeln(in text: String) {
+        print(text);
+    }
+}
+
+class Main {
+    public function main() {
+        var console = new System::IO::Console();
+        console.writeln("Hello from Namespace!");
+    }
+}

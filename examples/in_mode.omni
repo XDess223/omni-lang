@@ -1,0 +1,14 @@
+class MathHelper {
+    public function multiply(in a: Int, in b: Int) : Int {
+        // Attempting to mutate an 'in' parameter should trigger a semantic error
+        a = a * b; // INVALID: a is read-only
+        return a;
+    }
+}
+
+class Main {
+    public function main() {
+        var helper = new MathHelper();
+        print("Result", helper.multiply(5, 5));
+    }
+}
