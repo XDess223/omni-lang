@@ -1,0 +1,12 @@
+[package]
+name = "omni-cli"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "omni"
+path = "src/main.rs"
+
+[dependencies]
+omni-compiler = { path = "../omni-compiler" }
+omni-vm       = { path = "../omni-vm" }

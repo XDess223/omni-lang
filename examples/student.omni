@@ -1,0 +1,33 @@
+// student.omni — Student Grade Tracker in Omni
+
+class Student {
+    private var name : String ;
+    private var grade : Int ;
+
+    public Student(in n : String, in g : Int) {
+        name = n;
+        grade = g;
+    }
+
+    public function getGrade() : Int {
+        return grade;
+    }
+
+    public function describe() {
+        print(name);
+    }
+}
+
+class Main {
+    public function main() {
+        var student = new Student("Alice", 95);
+
+        if (student.getGrade() >= 90) {
+            print("Excellent!");
+        } else {
+            print("Keep trying.");
+        }
+
+        student.describe();
+    }
+}

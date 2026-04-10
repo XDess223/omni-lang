@@ -1,0 +1,7 @@
+[workspace]
+members = [
+    "omni-compiler",
+    "omni-vm",
+    "omni-cli",
+]
+resolver = "2"

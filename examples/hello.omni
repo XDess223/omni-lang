@@ -1,0 +1,8 @@
+// hello.omni — Hello World in Omni
+
+class Main {
+    public function main() {
+        var greeting = "Hello, Omni!";
+        print(greeting);
+    }
+}
