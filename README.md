@@ -152,14 +152,24 @@ class Synchronization {
 ---
 
 > [!CAUTION]
-> ### ⚠️ Current Prototype Limitations
-> - **No Method Overloading**: Methods are resolved by name only. You cannot have multiple methods with the same name and different parameter types.
-> - **Built-in Generics Only**: While `List<T>` is supported, **user-defined generics** (e.g., `class MyBox<T>`) are not yet implemented.
+> ### ⚠️ State of the Prototype vs. Full Specification
+> Omni is currently in a **Prototype Phase**. Many features defined in the [Whitepaper](file:///c:/Users/verse/Desktop/CSC454/omni-lang/OmniProgrammingLanguageWhitepaper.md) are not yet implemented in the current toolchain.
+>
+> | Feature | Target Specification (Whitepaper) | Current Prototype Status |
+> | :--- | :--- | :--- |
+> | **Generics** | Full Parametric Polymorphism | **Built-in `List<T>` only**. |
+> | **Namespaces** | Logic grouping & `import` system | **Not Implemented**. |
+> | **Method Overloading** | Signature-based dispatch | **Name-only** (Resolved by name only). |
+> | **Closures** | First-class functions & Closures | **Methods only** (No anonymous functions). |
+> | **Reflection** | Managed & Secure Reflection | **Not Implemented**. |
+> | **Parameters** | Keyword & Positional matching | **Positional only**. |
+> | **Semicolons** | Standard statement termination | **Mandatory** for all fields/statements. |
+> | **Inheritance** | Single Inheritance + Interfaces | **Experimental** (Basic support only). |
+>
+> **Prototype Implementation Rules:**
 > - **Strict Nominal Typing**: Two classes with identical fields are NOT interchangeable; they must be the exact same named type.
-> - **Limited Primitive Types**: Only `Int`, `Float`, `Bool`, and `String` are supported. There are no `Char`, `Byte`, or `Short` types.
-> - **No Static Members**: All fields and methods are instance-level.
-> - **Strict Semicolons**: Unlike some modern languages, Omni requires a semicolon after *every* field declaration and statement.
-> - **Inheritance Caveats**: Deep inheritance hierarchies and complex `super` call patterns are still experimental in the VM.
+> - **Limited Primitive Types**: Only `Int`, `Float`, `Bool`, and `String` are supported.
+> - **No Static Members**: All fields and methods are instance-level (requires `new`).
 
 ## 🛠️ 6. IDE Support
 
