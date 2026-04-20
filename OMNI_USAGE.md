@@ -32,24 +32,32 @@ class Main {
 Omni keywords are modern and expressive.
 
 ### Variables & Types
+Variables must be declared within a method or as class fields.
 ```omni
-var count = 42;                 // Inferred as Int
-var name : String = "Omni";     // Explicit type
-var score : Float = 3.14;
-var isReady : Bool = true;
-var maybeAge : Int? = null;     // Optional type (Null-Safe)
+class Example {
+    private var score : Float = 3.14; // Field
+
+    public function showcase() {
+        var count = 42;             // Inferred as Int
+        var name : String = "Omni"; // Explicit type
+        var isReady : Bool = true;
+        var maybeAge : Int? = null; // Optional type (Null-Safe)
+    }
+}
 ```
 
 ### Control Flow
 ```omni
-if (count > 0) {
-    print("Positive");
-} else {
-    print("Zero or negative");
-}
+public function logic(in count : Int, in items : List<String>) {
+    if (count > 0) {
+        print("Positive");
+    } else {
+        print("Zero or negative");
+    }
 
-foreach (item in items) {
-    print(item);
+    foreach (item in items) {
+        print(item);
+    }
 }
 ```
 
@@ -74,9 +82,18 @@ class Student {
     }
 }
 
-// Usage
-var s = new Student("Alice", 95);
-s.describe();
+// Usage in a Main class
+class Main {
+    public function main() {
+        var classList = new List<Student>();
+        
+        // Best practice: instantiate separately
+        var s1 = new Student("Alice", 95);
+        classList.add(s1);
+        
+        s1.describe();
+    }
+}
 ```
 
 ---
@@ -86,12 +103,16 @@ s.describe();
 Omni features a sophisticated stack-unwinding exception system with guaranteed `finally` execution.
 
 ```omni
-try {
-    throw new NetworkException("Timeout");
-} catch (NetworkException e) {
-    print("Caught: " + e.getMessage());
-} finally {
-    print("This always runs, even if you return or throw!");
+class ErrorHandler {
+    public function demo() {
+        try {
+            throw new NetworkException("Timeout");
+        } catch (NetworkException e) {
+            print("Caught: " + e.getMessage());
+        } finally {
+            print("This always runs, even if you return or throw!");
+        }
+    }
 }
 ```
 
@@ -107,16 +128,24 @@ Omni is built for the multicore era.
 ### Parallel Loops (`forall`)
 Process collections in parallel with zero boilerplate.
 ```omni
-forall (i = 0 to 1000) {
-    doWork(i); // Efficiently distributed across CPU cores
+class ParallelProcessor {
+    public function process() {
+        forall (i = 0 to 1000) {
+            doWork(i); // Efficiently distributed across CPU cores
+        }
+    }
 }
 ```
 
 ### Monitors (Thread Safety)
 Protect shared data using the `monitor` keyword.
 ```omni
-monitor (sharedObject) {
-    sharedObject.increment(); // Thread-safe execution
+class Synchronization {
+    public function safeUpdate(sharedObject : Counter) {
+        monitor (sharedObject) {
+            sharedObject.increment(); // Thread-safe execution
+        }
+    }
 }
 ```
 
