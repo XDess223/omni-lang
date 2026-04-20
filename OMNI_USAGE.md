@@ -22,6 +22,9 @@ class Main {
 ```
 **Run it**: `omni run hello.omni`
 
+> [!IMPORTANT]
+> **Prototype Requirement**: In the current Omni prototype, all code must be encapsulated within a class. Top-level functions or script-style statements are not yet supported. Every executable program must have a `Main` class with a `public function main()` method.
+
 ---
 
 ## 💎 2. Core Syntax & Data Types
@@ -119,6 +122,16 @@ monitor (sharedObject) {
 
 ---
 
+> [!CAUTION]
+> ### ⚠️ Current Prototype Limitations
+> - **No Method Overloading**: Methods are resolved by name only. You cannot have multiple methods with the same name and different parameter types.
+> - **Built-in Generics Only**: While `List<T>` is supported, **user-defined generics** (e.g., `class MyBox<T>`) are not yet implemented.
+> - **Strict Nominal Typing**: Two classes with identical fields are NOT interchangeable; they must be the exact same named type.
+> - **Limited Primitive Types**: Only `Int`, `Float`, `Bool`, and `String` are supported. There are no `Char`, `Byte`, or `Short` types.
+> - **No Static Members**: All fields and methods are instance-level.
+> - **Strict Semicolons**: Unlike some modern languages, Omni requires a semicolon after *every* field declaration and statement.
+> - **Inheritance Caveats**: Deep inheritance hierarchies and complex `super` call patterns are still experimental in the VM.
+
 ## 🛠️ 6. IDE Support
 
 To get syntax highlighting and Omni-aware features in VS Code:
@@ -128,7 +141,10 @@ To get syntax highlighting and Omni-aware features in VS Code:
 ---
 
 ## 🎓 Pro Tips
-- Use `in` parameters for read-only views of data.
+- Use `in` parameters for read-only views. Note that `in` parameters may prevent calling methods that modify (or are perceived to modify) the object, such as `List.add()`.
+- **`in` Mode Propagation**: If you pass an `in` parameter as an argument to another method, that receiving method must also declare the parameter as `in`.
+- **Built-in Collections**: `List<T>` is built-in to the compiler and VM. You do **not** need to import `stdlib.omni` to use it.
+- **VM Best Practice**: In the current prototype, avoid nesting `new` calls directly inside method arguments (e.g., `list.add(new Student(...))`). Instead, instantiate objects as separate variables before passing them.
 - Checked exceptions must be declared in method signatures: `function run() throws MyException`.
 - String concatenation works naturally with `+`.
 
