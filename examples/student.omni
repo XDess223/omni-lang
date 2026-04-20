@@ -16,18 +16,26 @@ class Student {
     public function describe() {
         print(name, "has a grade of", grade);
     }
+    
+    public function getAverage(in students : List<Student>) : Int {
+    var total = 0;
+    foreach (s in students) {
+        total = total + s.getGrade();
+    }
+    return total / students.size();
+    }
 }
 
 class Main {
-    public function main() {
-        var student = new Student("Alice", 95);
+    public function main(); {
+        var classList = List<Student>();
+        classList.add(new Student("Alice", 90));
+        classList.add(new Student("Bob",   75));
+        classList.add(new Student("Charlie", 85));
 
-        if (student.getGrade() >= 90) {
-            print("Excellent!");
-        } else {
-            print("Keep trying.");
-        }
+        foreach (s in classList) { s.describe(); };
 
-        student.describe();
+        var avg = getAverage(classList);
+        print("Class Average: " + avg);
     }
 }

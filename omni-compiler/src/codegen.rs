@@ -4,9 +4,9 @@
 // Walks the semantically-verified AST and emits Omni bytecode Chunks.
 // One Chunk is produced per method; all methods are stored in CompiledProgram.
 
-use std::collections::HashMap;
 use crate::ast::*;
 use crate::bytecode::{Chunk, CompiledProgram, Instruction};
+use std::collections::HashMap;
 
 // ── Local variable slot allocator ─────────────────────────────────────────────
 
@@ -19,7 +19,10 @@ struct Locals {
 
 impl Locals {
     fn new() -> Self {
-        Self { slots: vec![HashMap::new()], next_slot: 0 }
+        Self {
+            slots: vec![HashMap::new()],
+            next_slot: 0,
+        }
     }
 
     fn push_scope(&mut self) {
@@ -32,7 +35,10 @@ impl Locals {
 
     fn declare(&mut self, name: &str) -> u16 {
         let slot = self.next_slot;
-        self.slots.last_mut().unwrap().insert(name.to_string(), slot);
+        self.slots
+            .last_mut()
+            .unwrap()
+            .insert(name.to_string(), slot);
         self.next_slot += 1;
         slot
     }
@@ -80,7 +86,9 @@ impl CodeGen {
         self.current_class = class.name.clone();
         self.current_parent = class.extends.clone();
         if let Some(parent) = &class.extends {
-            self.output.inheritance.insert(class.name.clone(), parent.clone());
+            self.output
+                .inheritance
+                .insert(class.name.clone(), parent.clone());
         }
 
         // Collect all field initializers to prepend them to constructors
@@ -108,7 +116,8 @@ impl CodeGen {
             if let ClassMember::Method(_, method) = member {
                 let is_constructor = method.name == class.name;
                 let key = format!("{}::{}", class.name, method.name);
-                let chunk = self.gen_method(method, if is_constructor { &field_inits } else { &[] });
+                let chunk =
+                    self.gen_method(method, if is_constructor { &field_inits } else { &[] });
                 self.output.methods.insert(key, chunk);
             }
         }
@@ -185,7 +194,6 @@ impl CodeGen {
 
     fn gen_stmt(&mut self, stmt: &Stmt, chunk: &mut Chunk, locals: &mut Locals) {
         match stmt {
-
             // var x = expr  or  var x : Type = expr
             Stmt::VarDecl(decl) => {
                 if let Some(ref init) = decl.initializer {
@@ -207,7 +215,12 @@ impl CodeGen {
                             self.gen_expr(idx, chunk, locals);
                         }
                         self.gen_expr(value, chunk, locals);
-                        chunk.emit(Instruction::AStore { dims: indices.len() as u32 }, 0);
+                        chunk.emit(
+                            Instruction::AStore {
+                                dims: indices.len() as u32,
+                            },
+                            0,
+                        );
                     }
                     _ => {
                         self.gen_expr(value, chunk, locals);
@@ -228,7 +241,11 @@ impl CodeGen {
 
             // if (cond) { then } [else { else }]
             // EBNF: <if_stmt> → if (<logic_expr>) <stmt> [else <stmt>]
-            Stmt::If { cond, then_block, else_block } => {
+            Stmt::If {
+                cond,
+                then_block,
+                else_block,
+            } => {
                 self.gen_expr(cond, chunk, locals);
 
                 // Emit a placeholder JumpIfFalse — we'll patch it once we know
@@ -240,37 +257,110 @@ impl CodeGen {
                 if let Some(eb) = else_block {
                     // Jump past the else block at the end of the then block.
                     let jump_end_idx = chunk.emit(Instruction::Jump(0), 0);
-                    chunk.patch_jump(jump_false_idx);  // false → start of else
+                    chunk.patch_jump(jump_false_idx); // false → start of else
                     self.gen_block(eb, chunk, locals);
-                    chunk.patch_jump(jump_end_idx);    // end of else → here
+                    chunk.patch_jump(jump_end_idx); // end of else → here
                 } else {
-                    chunk.patch_jump(jump_false_idx);  // false → after if
+                    chunk.patch_jump(jump_false_idx); // false → after if
                 }
             }
 
             // foreach (var in collection) { body }
             // EBNF: <iteration_stmt> → foreach (<id> in <collection>) <block>
-            Stmt::Foreach { var: _, collection, body } => {
+            // Emitted sequence:
+            //   [eval collection]  StoreLocal(col_slot)
+            //   PushInt(0)         StoreLocal(i_slot)        ← loop counter = 0
+            // loop_start:
+            //   LoadLocal(i_slot)
+            //   LoadLocal(col_slot) InvokeVirtual(size, 0)   ← size on stack
+            //   Lt                                            ← i < size?
+            //   JumpIfFalse → exit
+            //   LoadLocal(col_slot) LoadLocal(i_slot)
+            //   InvokeVirtual(get, 1)                        ← element on stack
+            //   StoreLocal(var_slot)                         ← bind loop var
+            //   [body]
+            //   LoadLocal(i_slot) PushInt(1) Add StoreLocal(i_slot)  ← i++
+            //   Jump → loop_start
+            // exit:
+            Stmt::Foreach {
+                var,
+                collection,
+                body,
+            } => {
+                // 1. Evaluate collection and stash it
                 self.gen_expr(collection, chunk, locals);
                 let col_slot = locals.declare("__foreach_col__");
                 chunk.emit(Instruction::StoreLocal(col_slot), 0);
-                // Foreach currently uses sequential protocol
-                self.gen_block(body, chunk, locals);
-            }
 
+                // 2. Declare index counter, initialise to 0
+                let i_slot = locals.declare("__foreach_i__");
+                chunk.emit(Instruction::PushInt(0), 0);
+                chunk.emit(Instruction::StoreLocal(i_slot), 0);
+
+                // 3. Loop header — record the IP we will jump back to
+                let loop_start = chunk.current_ip();
+
+                // 4. Condition: i < col.size()
+                chunk.emit(Instruction::LoadLocal(i_slot), 0);
+                chunk.emit(Instruction::LoadLocal(col_slot), 0);
+                let size_idx = chunk.intern_name("size");
+                chunk.emit(
+                    Instruction::InvokeVirtual {
+                        name_idx: size_idx,
+                        argc: 0,
+                    },
+                    0,
+                );
+                chunk.emit(Instruction::Lt, 0);
+
+                // 5. Exit jump (placeholder — patched at end)
+                let exit_jump_idx = chunk.emit(Instruction::JumpIfFalse(0), 0);
+
+                // 6. Load current element:  col.get(i)
+                chunk.emit(Instruction::LoadLocal(col_slot), 0);
+                chunk.emit(Instruction::LoadLocal(i_slot), 0);
+                let get_idx = chunk.intern_name("get");
+                chunk.emit(
+                    Instruction::InvokeVirtual {
+                        name_idx: get_idx,
+                        argc: 1,
+                    },
+                    0,
+                );
+
+                // 7. Bind loop variable
+                let var_slot = locals.declare(var);
+                chunk.emit(Instruction::StoreLocal(var_slot), 0);
+
+                // 8. Body
+                self.gen_block(body, chunk, locals);
+
+                // 9. Increment: i = i + 1
+                chunk.emit(Instruction::LoadLocal(i_slot), 0);
+                chunk.emit(Instruction::PushInt(1), 0);
+                chunk.emit(Instruction::Add, 0);
+                chunk.emit(Instruction::StoreLocal(i_slot), 0);
+
+                // 10. Back-edge jump
+                chunk.emit(Instruction::Jump(loop_start), 0);
+
+                // 11. Patch exit
+                chunk.patch_jump(exit_jump_idx);
+            }
             // forall (var = start to end) { body }  — statement-level concurrency
-            Stmt::Forall { var, start, end, body } => {
+            Stmt::Forall {
+                var,
+                start,
+                end,
+                body,
+            } => {
                 self.gen_expr(start, chunk, locals);
                 self.gen_expr(end, chunk, locals);
-                
+
                 // Compile the body as a closure with 1 parameter (the loop variable)
                 let closure_id = self.forall_counter;
                 self.forall_counter += 1;
-                let closure_key = format!(
-                    "{}::__forall_{}__",
-                    self.current_class,
-                    closure_id
-                );
+                let closure_key = format!("{}::__forall_{}__", self.current_class, closure_id);
                 let mut closure_chunk = Chunk::new();
                 let mut closure_locals = locals.clone();
                 closure_locals.push_scope();
@@ -285,44 +375,70 @@ impl CodeGen {
                     closure_chunk.emit(Instruction::Return, 0);
                 }
                 closure_chunk.local_count = closure_locals.next_slot as u16;
-                self.output.methods.insert(closure_key.clone(), closure_chunk);
-                
+                self.output
+                    .methods
+                    .insert(closure_key.clone(), closure_chunk);
+
                 let name_idx = chunk.intern_name(&closure_key);
                 let base_slot = locals.next_slot;
-                chunk.emit(Instruction::MakeClosure { name_idx, base_slot }, 0);
+                chunk.emit(
+                    Instruction::MakeClosure {
+                        name_idx,
+                        base_slot,
+                    },
+                    0,
+                );
                 chunk.emit(Instruction::ExecuteForall, 0);
             }
 
             // monitor (target) { body }
+            // Emitted sequence:
+            //   [eval target]         StoreLocal(lock_slot)
+            //   LoadLocal(lock_slot)  MonitorEnter
+            //   TryBeginFinally { handler_ip: ?? }   ← patched to finally block
+            //   [body]
+            //   TryEnd { past_ip: ?? }               ← normal exit; patched to after finally
+            // --- finally block (handler_ip) ---
+            //   LoadLocal(lock_slot)  MonitorExit
+            //   EndFinally                           ← resumes return or re-throws
+            // --- end (past_ip) ---
             Stmt::Monitor { target, body } => {
+                // 1. Evaluate target and save it
                 self.gen_expr(target, chunk, locals);
                 let lock_slot = locals.declare("__monitor_lock__");
                 chunk.emit(Instruction::StoreLocal(lock_slot), 0);
-                
+
+                // 2. Acquire the lock
                 chunk.emit(Instruction::LoadLocal(lock_slot), 0);
                 chunk.emit(Instruction::MonitorEnter, 0);
 
-                // Use TryBeginFinally to ensure lock release
+                // 3. Open try-finally region
                 let try_begin_idx = chunk.emit(Instruction::TryBeginFinally { handler_ip: 0 }, 0);
-                self.gen_block(body, chunk, locals);
-                
-                // Normal exit: must release lock too!
-                chunk.emit(Instruction::LoadLocal(lock_slot), 0);
-                chunk.emit(Instruction::MonitorExit, 0);
 
+                // 4. Body
+                self.gen_block(body, chunk, locals);
+
+                // 5. Normal-path exit marker — jumps past the finally block
                 let try_end_idx = chunk.emit(Instruction::TryEnd { past_ip: 0 }, 0);
-                
-                // "Finally" part
+
+                // 6. Patch TryBeginFinally → here (start of finally block)
                 chunk.patch_jump(try_begin_idx);
+
+                // 7. Finally block: always release the lock, then resume
                 chunk.emit(Instruction::LoadLocal(lock_slot), 0);
                 chunk.emit(Instruction::MonitorExit, 0);
-                chunk.emit(Instruction::Rethrow, 0); // Propagate if an exception happened
-                
+                chunk.emit(Instruction::EndFinally, 0);
+
+                // 8. Patch TryEnd → here (after the finally block)
                 chunk.patch_jump(try_end_idx);
             }
 
             // try { } catch (E e) { } finally { }
-            Stmt::TryCatch { try_block, catches, finally_block } => {
+            Stmt::TryCatch {
+                try_block,
+                catches,
+                finally_block,
+            } => {
                 // Reserve a TryBeginCatch slot; patch handler_ip after try body.
                 let try_begin_idx = chunk.emit(Instruction::TryBeginCatch { handler_ip: 0 }, 0);
 
@@ -339,13 +455,20 @@ impl CodeGen {
                 for catch in catches {
                     let class_idx = chunk.intern_name(&catch.exception_type);
                     let local_slot = locals.declare(&catch.binding);
-                    let catch_match_idx = chunk.emit(Instruction::CatchMatch { class_idx, local_slot, next_ip: 0 }, 0);
-                    
+                    let catch_match_idx = chunk.emit(
+                        Instruction::CatchMatch {
+                            class_idx,
+                            local_slot,
+                            next_ip: 0,
+                        },
+                        0,
+                    );
+
                     self.gen_block(&catch.body, chunk, locals);
-                    
+
                     let after_catch = chunk.emit(Instruction::Jump(0), 0);
                     catch_end_jumps.push(after_catch);
-                    
+
                     // Patch mismatch to start at next catch
                     chunk.patch_jump(catch_match_idx);
                 }
@@ -378,30 +501,34 @@ impl CodeGen {
                 chunk.emit(Instruction::Pop, 0);
             }
 
-            Stmt::Switch { condition, cases, default_case } => {
+            Stmt::Switch {
+                condition,
+                cases,
+                default_case,
+            } => {
                 self.gen_expr(condition, chunk, locals);
                 let mut end_jumps = Vec::new();
-                
+
                 for case in cases {
                     chunk.emit(Instruction::Dup, 0);
                     self.gen_expr(&case.value, chunk, locals);
                     chunk.emit(Instruction::Eq, 0);
-                    
+
                     let next_case_jump = chunk.emit(Instruction::JumpIfFalse(0), 0);
-                    
+
                     chunk.emit(Instruction::Pop, 0); // pop the condition clone
                     self.gen_block(&case.body, chunk, locals);
                     end_jumps.push(chunk.emit(Instruction::Jump(0), 0));
-                    
+
                     chunk.patch_jump(next_case_jump);
                 }
-                
+
                 // Fallthrough to default if no cases matched
                 chunk.emit(Instruction::Pop, 0); // pop original condition
                 if let Some(df) = default_case {
                     self.gen_block(df, chunk, locals);
                 }
-                
+
                 for jump in end_jumps {
                     chunk.patch_jump(jump);
                 }
@@ -437,14 +564,19 @@ impl CodeGen {
                 // to avoid complex stack manipulation.
                 // This branch (gen_assign) is now a fallback or for simple targets.
                 // For ArrayAccess, the primary logic is moved to Expr::Assign to get the order right.
-                
+
                 // Fallback (if somehow called directly): [value, array, indices]
                 self.gen_expr(array, chunk, locals);
                 for idx in indices {
                     self.gen_expr(idx, chunk, locals);
                 }
                 // At this point stack is [value, array, i, j]. We need AStore to pop value first thing.
-                chunk.emit(Instruction::AStore { dims: indices.len() as u32 }, 0);
+                chunk.emit(
+                    Instruction::AStore {
+                        dims: indices.len() as u32,
+                    },
+                    0,
+                );
             }
             _ => {}
         }
@@ -454,12 +586,24 @@ impl CodeGen {
 
     fn gen_expr(&mut self, expr: &Expr, chunk: &mut Chunk, locals: &mut Locals) {
         match expr {
-            Expr::IntLit(n)    => { chunk.emit(Instruction::PushInt(*n), 0); }
-            Expr::FloatLit(f)  => { chunk.emit(Instruction::PushFloat(*f), 0); }
-            Expr::BoolLit(b)   => { chunk.emit(Instruction::PushBool(*b), 0); }
-            Expr::Null         => { chunk.emit(Instruction::PushNull, 0); }
-            Expr::This         => { chunk.emit(Instruction::LoadLocal(0), 0); }
-            Expr::Super        => { chunk.emit(Instruction::LoadLocal(0), 0); }
+            Expr::IntLit(n) => {
+                chunk.emit(Instruction::PushInt(*n), 0);
+            }
+            Expr::FloatLit(f) => {
+                chunk.emit(Instruction::PushFloat(*f), 0);
+            }
+            Expr::BoolLit(b) => {
+                chunk.emit(Instruction::PushBool(*b), 0);
+            }
+            Expr::Null => {
+                chunk.emit(Instruction::PushNull, 0);
+            }
+            Expr::This => {
+                chunk.emit(Instruction::LoadLocal(0), 0);
+            }
+            Expr::Super => {
+                chunk.emit(Instruction::LoadLocal(0), 0);
+            }
 
             Expr::StringLit(s) => {
                 let idx = chunk.intern_string(s);
@@ -490,13 +634,21 @@ impl CodeGen {
                     if let Some(parent) = self.current_parent.clone() {
                         // Push 'this' as first argument for the constructor
                         chunk.emit(Instruction::LoadLocal(0), 0);
-                        for arg in args { self.gen_expr(&arg.value, chunk, locals); }
-                        
+                        for arg in args {
+                            self.gen_expr(&arg.value, chunk, locals);
+                        }
+
                         let constructor_key = format!("{}::{}", parent, parent);
                         let nidx = chunk.intern_name(&constructor_key);
                         let argc = args.len() as u8 + 1;
                         // We use Call here because parent constructor is a static-like lookup
-                        chunk.emit(Instruction::Call { name_idx: nidx, argc }, 0);
+                        chunk.emit(
+                            Instruction::Call {
+                                name_idx: nidx,
+                                argc,
+                            },
+                            0,
+                        );
                         return;
                     }
                 }
@@ -509,9 +661,17 @@ impl CodeGen {
                             chunk.emit(Instruction::GetType, 0);
                         } else {
                             self.gen_expr(object, chunk, locals);
-                            for arg in args { self.gen_expr(&arg.value, chunk, locals); }
+                            for arg in args {
+                                self.gen_expr(&arg.value, chunk, locals);
+                            }
                             let nidx = chunk.intern_name(field);
-                            chunk.emit(Instruction::InvokeVirtual { name_idx: nidx, argc: args.len() as u8 }, 0);
+                            chunk.emit(
+                                Instruction::InvokeVirtual {
+                                    name_idx: nidx,
+                                    argc: args.len() as u8,
+                                },
+                                0,
+                            );
                         }
                     }
                     _ => {
@@ -521,20 +681,32 @@ impl CodeGen {
                                 if let Some(slot) = locals.lookup(name) {
                                     // Pushes the closure from the local slot
                                     chunk.emit(Instruction::LoadLocal(slot), 0);
-                                    for arg in args { self.gen_expr(&arg.value, chunk, locals); }
+                                    for arg in args {
+                                        self.gen_expr(&arg.value, chunk, locals);
+                                    }
                                     chunk.emit(Instruction::CallClosure { argc }, 0);
                                 } else {
                                     // Named call (Builtin or other global function)
                                     // We do NOT call gen_expr(callee) here to avoid the implicit 'this.field' lookup
-                                    for arg in args { self.gen_expr(&arg.value, chunk, locals); }
+                                    for arg in args {
+                                        self.gen_expr(&arg.value, chunk, locals);
+                                    }
                                     let nidx = chunk.intern_name(name);
-                                    chunk.emit(Instruction::Call { name_idx: nidx, argc }, 0);
+                                    chunk.emit(
+                                        Instruction::Call {
+                                            name_idx: nidx,
+                                            argc,
+                                        },
+                                        0,
+                                    );
                                 }
                             }
                             _ => {
                                 // Complex callee (e.g. an expression returning a closure)
                                 self.gen_expr(callee, chunk, locals);
-                                for arg in args { self.gen_expr(&arg.value, chunk, locals); }
+                                for arg in args {
+                                    self.gen_expr(&arg.value, chunk, locals);
+                                }
                                 chunk.emit(Instruction::CallClosure { argc }, 0);
                             }
                         }
@@ -549,10 +721,18 @@ impl CodeGen {
                 for idx in indices {
                     self.gen_expr(idx, chunk, locals);
                 }
-                chunk.emit(Instruction::ALoad { dims: indices.len() as u32 }, 0);
+                chunk.emit(
+                    Instruction::ALoad {
+                        dims: indices.len() as u32,
+                    },
+                    0,
+                );
             }
 
-            Expr::ArrayAlloc { element_type, sizes } => {
+            Expr::ArrayAlloc {
+                element_type,
+                sizes,
+            } => {
                 for size in sizes {
                     self.gen_expr(size, chunk, locals);
                 }
@@ -562,11 +742,23 @@ impl CodeGen {
                     _ => "Object".to_string(),
                 };
                 let class_idx = chunk.intern_name(&format!("{}$Array", type_name));
-                chunk.emit(Instruction::NewArray { class_idx, dims: sizes.len() as u32 }, 0);
+                chunk.emit(
+                    Instruction::NewArray {
+                        class_idx,
+                        dims: sizes.len() as u32,
+                    },
+                    0,
+                );
             }
 
-            Expr::New { class_name, type_args: _, args } => {
-                for arg in args { self.gen_expr(&arg.value, chunk, locals); }
+            Expr::New {
+                class_name,
+                type_args: _,
+                args,
+            } => {
+                for arg in args {
+                    self.gen_expr(&arg.value, chunk, locals);
+                }
                 let class_idx = chunk.intern_name(class_name);
                 let argc = args.len() as u8;
                 chunk.emit(Instruction::New { class_idx, argc }, 0);
@@ -576,19 +768,19 @@ impl CodeGen {
                 self.gen_expr(left, chunk, locals);
                 self.gen_expr(right, chunk, locals);
                 let instr = match op {
-                    BinOp::Add  => Instruction::Add,
-                    BinOp::Sub  => Instruction::Sub,
-                    BinOp::Mul  => Instruction::Mul,
-                    BinOp::Div  => Instruction::Div,
-                    BinOp::Mod  => Instruction::Mod,
-                    BinOp::Eq    => Instruction::Eq,
+                    BinOp::Add => Instruction::Add,
+                    BinOp::Sub => Instruction::Sub,
+                    BinOp::Mul => Instruction::Mul,
+                    BinOp::Div => Instruction::Div,
+                    BinOp::Mod => Instruction::Mod,
+                    BinOp::Eq => Instruction::Eq,
                     BinOp::NotEq => Instruction::NotEq,
-                    BinOp::Lt    => Instruction::Lt,
-                    BinOp::LtEq  => Instruction::LtEq,
-                    BinOp::Gt    => Instruction::Gt,
-                    BinOp::GtEq  => Instruction::GtEq,
-                    BinOp::And   => Instruction::And,
-                    BinOp::Or    => Instruction::Or,
+                    BinOp::Lt => Instruction::Lt,
+                    BinOp::LtEq => Instruction::LtEq,
+                    BinOp::Gt => Instruction::Gt,
+                    BinOp::GtEq => Instruction::GtEq,
+                    BinOp::And => Instruction::And,
+                    BinOp::Or => Instruction::Or,
                 };
                 chunk.emit(instr, 0);
             }
@@ -616,7 +808,7 @@ impl CodeGen {
                 let mut closure_chunk = Chunk::new();
                 let mut closure_locals = locals.clone(); // inherit parent environment
                 closure_locals.push_scope();
-                
+
                 for p in params {
                     closure_locals.declare(&p.name);
                 }
@@ -629,11 +821,19 @@ impl CodeGen {
                     closure_chunk.emit(Instruction::Return, 0);
                 }
                 closure_chunk.local_count = closure_locals.next_slot as u16;
-                self.output.methods.insert(closure_key.clone(), closure_chunk);
+                self.output
+                    .methods
+                    .insert(closure_key.clone(), closure_chunk);
                 // Push the closure onto the VM stack via MakeClosure
                 let name_idx = chunk.intern_name(&closure_key);
                 let base_slot = locals.next_slot;
-                chunk.emit(Instruction::MakeClosure { name_idx, base_slot }, 0);
+                chunk.emit(
+                    Instruction::MakeClosure {
+                        name_idx,
+                        base_slot,
+                    },
+                    0,
+                );
             }
         }
     }

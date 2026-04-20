@@ -1,0 +1,49 @@
+class Student {
+  private var name  : String;
+  private var grade : Int;
+
+  public Student(in n : String, in g : Int) {
+    name = n;
+    grade = g;
+  }
+
+  public function getGrade() : Int {
+    return grade;
+  }
+
+  public function describe() {
+    print("Student: " + name + ", Grade: " + grade);
+  }
+}
+
+class Statistics {
+  public function getAverage(students : List<Student>) : Int {
+    var total = 0;
+    foreach (s in students) {
+      total = total + s.getGrade();
+    }
+    return total / students.size();
+  }
+}
+
+class Main {
+  public function main() {
+    var stats = new Statistics();
+    var classList = new List<Student>();
+
+    var s1 = new Student("Alice", 90);
+    var s2 = new Student("Bob", 75);
+    var s3 = new Student("Charlie", 85);
+
+    classList.add(s1);
+    classList.add(s2);
+    classList.add(s3);
+
+    foreach (s in classList) { 
+        s.describe(); 
+    }
+
+    var avg = stats.getAverage(classList);
+    print("Class Average: " + avg);
+  }
+}

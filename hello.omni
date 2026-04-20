@@ -1,0 +1,6 @@
+class Main {
+    public function main(){
+        var greet = "Hello, I am Omni";
+        print(greet);
+    }
+}
