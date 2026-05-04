@@ -4,7 +4,7 @@ Welcome to Omni, the programming language designed for **Performance**, **Concur
 
 ---
 
-## 🚀 1. Getting Started: The Omni Zen
+## 1. Getting Started: The Omni Zen
 
 Omni is a **Nominal**, **Statically-Typed** (with inference), **Object-Oriented** language.
 - **Safety**: Null-safe by default. Use `?` for options.
@@ -27,7 +27,7 @@ class Main {
 
 ---
 
-## 💎 2. Core Syntax & Data Types
+## 2. Core Syntax & Data Types
 
 Omni keywords are modern and expressive.
 
@@ -63,7 +63,7 @@ public function logic(in count : Int, in items : List<String>) {
 
 ---
 
-## ⚡ 3. Objects & Classes
+## 3. Objects & Classes
 
 Everything in Omni is an object. Classes support fields, methods, and constructors.
 
@@ -98,7 +98,7 @@ class Main {
 
 ---
 
-## 🛡️ 4. Robust Exception Handling (New!)
+## 4. Robust Exception Handling (New!)
 
 Omni features a sophisticated stack-unwinding exception system with guaranteed `finally` execution.
 
@@ -121,7 +121,7 @@ Omni ensures that if you `return` from a `try` block, the `finally` block execut
 
 ---
 
-## 🏎️ 5. Concurrency: The Professional Level
+## 5. Concurrency: The Professional Level
 
 Omni is built for the multicore era.
 
@@ -152,7 +152,7 @@ class Synchronization {
 ---
 
 > [!CAUTION]
-> ### ⚠️ State of the Prototype vs. Full Specification
+> ### State of the Prototype vs. Full Specification
 > Omni is currently in a **Prototype Phase**. Many features defined in the [Whitepaper](file:///c:/Users/verse/Desktop/CSC454/omni-lang/OmniProgrammingLanguageWhitepaper.md) are not yet implemented in the current toolchain.
 >
 > | Feature | Target Specification (Whitepaper) | Current Prototype Status |
@@ -171,7 +171,7 @@ class Synchronization {
 > - **Limited Primitive Types**: Only `Int`, `Float`, `Bool`, and `String` are supported.
 > - **No Static Members**: All fields and methods are instance-level (requires `new`).
 
-## 🛠️ 6. IDE Support
+## 6. IDE Support
 
 To get syntax highlighting and Omni-aware features in VS Code:
 1. Locate the `omni-vscode/omni-lang-1.0.0.vsix` file.
@@ -179,7 +179,7 @@ To get syntax highlighting and Omni-aware features in VS Code:
 
 ---
 
-## 🎓 Pro Tips
+## Tips
 - Use `in` parameters for read-only views. Note that `in` parameters may prevent calling methods that modify (or are perceived to modify) the object, such as `List.add()`.
 - **`in` Mode Propagation**: If you pass an `in` parameter as an argument to another method, that receiving method must also declare the parameter as `in`.
 - **Built-in Collections**: `List<T>` is built-in to the compiler and VM. You do **not** need to import `stdlib.omni` to use it.
@@ -189,7 +189,7 @@ To get syntax highlighting and Omni-aware features in VS Code:
 
 ---
 
-# 🔧 Maintenance & Developer Workflow
+# Maintenance & Developer Workflow
 
 This section is for developers maintaining the Omni toolchain itself.
 
