@@ -1,0 +1,53 @@
+// examples/list_extended.omni
+// Demonstrates all new List<T> methods:
+//   add, get, set, remove, contains, indexOf, isEmpty, clear, size
+
+class Main {
+    public function main() {
+        var numbers = new List<Int>();
+
+        print("--- List Extended Methods Demo ---");
+
+        // isEmpty on empty list
+        print("Is empty? " + numbers.isEmpty());
+
+        // add elements
+        numbers.add(10);
+        numbers.add(20);
+        numbers.add(30);
+        numbers.add(40);
+        numbers.add(50);
+        print("After 5 adds, size = " + numbers.size());
+
+        // get
+        print("Element at index 2: " + numbers.get(2));
+
+        // set
+        numbers.set(2, 99);
+        print("After set(2, 99), element at 2: " + numbers.get(2));
+
+        // contains
+        var has99 = numbers.contains(99);
+        var has30 = numbers.contains(30);
+        print("Contains 99? " + has99);
+        print("Contains 30 (was replaced)? " + has30);
+
+        // indexOf
+        var idx = numbers.indexOf(40);
+        print("indexOf(40) = " + idx);
+
+        var notFound = numbers.indexOf(999);
+        print("indexOf(999) = " + notFound);
+
+        // remove
+        var removed = numbers.remove(0);
+        print("Removed at index 0: " + removed);
+        print("Size after remove: " + numbers.size());
+
+        // clear
+        numbers.clear();
+        print("After clear, isEmpty? " + numbers.isEmpty());
+
+        print("--- End List Demo ---");
+    }
+}

@@ -1,0 +1,62 @@
+// examples/reflection.omni
+// Demonstrates controlled reflection: reading type metadata at runtime.
+// Introspection (reading) is allowed by default.
+// Intercession (modifying private fields) is blocked.
+
+interface IDescribable {
+    function describe() : String;
+}
+
+class Animal implements IDescribable {
+    private var name   : String;
+    private var weight : Int;
+
+    public Animal(in n : String, in w : Int) {
+        name   = n;
+        weight = w;
+    }
+
+    public function describe() : String {
+        return "Animal: " + name + " (" + weight + "kg)";
+    }
+
+    public function getName() : String { return name; }
+}
+
+class Main {
+    public function main() {
+        var a = new Animal(n: "Tiger", w: 200);
+        print("--- Controlled Reflection Demo ---");
+
+        // 1. getType() — returns class name string
+        print("Type: " + a.getType());
+
+        // 2. getMethods() — returns a List<String> of method names
+        var methods = a.getMethods();
+        print("Method count: " + methods.size());
+
+        // 3. getFields() — returns field names on this instance
+        var fields = a.getFields();
+        print("Field count: " + fields.size());
+
+        // 4. hasField() — check if a named field exists
+        var hasName = a.hasField("name");
+        print("Has 'name' field: " + hasName);
+
+        var hasFoo = a.hasField("foobar");
+        print("Has 'foobar' field: " + hasFoo);
+
+        // 5. getField() — read a field value by name
+        var nameVal = a.getField("name");
+        print("Field 'name' value: " + nameVal);
+
+        // 6. implementsInterface() — check interface compliance
+        var isDescribable = a.implementsInterface("IDescribable");
+        print("Implements IDescribable: " + isDescribable);
+
+        var isSerializable = a.implementsInterface("ISerializable");
+        print("Implements ISerializable: " + isSerializable);
+
+        print("--- End Reflection Demo ---");
+    }
+}

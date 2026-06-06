@@ -434,21 +434,30 @@ impl Vm {
                         .cloned()
                         .unwrap_or_default();
 
-                    if let Some(chunk) = self.program.methods.get(&fn_name).cloned() {
-                        let mut new_frame = CallFrame::new(chunk, fn_name, argc as usize);
+                    let is_print = fn_name == "print" || fn_name.starts_with("print/") || fn_name.ends_with("/print");
+
+                    let with_arity = format!("{}/{}", fn_name, argc);
+                    let (chunk_opt, resolved_key) = if let Some(chunk) = self.program.methods.get(&with_arity).cloned() {
+                        (Some(chunk), with_arity)
+                    } else if let Some(chunk) = self.program.methods.get(&fn_name).cloned() {
+                        (Some(chunk), fn_name.clone())
+                    } else {
+                        (None, String::new())
+                    };
+
+                    if let Some(chunk) = chunk_opt {
+                        let mut new_frame = CallFrame::new(chunk, resolved_key, argc as usize);
                         // Pop arguments from operand stack into local slots 0..argc.
                         for i in (0..argc as usize).rev() {
                             new_frame.locals[i] = self.pop()?;
                         }
                         self.frames.push(new_frame);
-                    } else if fn_name == "print" {
-                        // Built-in print handles variable arity, but we assume 1 for simple cases here,
-                        // or pop `argc` items and print them. Let's just pop `argc` items.
+                    } else if is_print {
                         let mut args = Vec::new();
                         for _ in 0..argc {
                             args.push(self.pop()?);
                         }
-                        args.reverse(); // Because we pop from last to first argument
+                        args.reverse();
                         
                         for (i, val) in args.iter().enumerate() {
                             if i > 0 { print!(" "); }
@@ -463,10 +472,8 @@ impl Vm {
                             }
                         }
                         println!();
-                        // Push a dummy return value so the surrounding ExprStmt has something to Pop.
                         self.push(Value::Null);
                     } else {
-                        // Optional: return an error for undefined methods instead of ignoring
                         return Err(VmError::UndefinedMethod(fn_name));
                     }
                 }
@@ -492,9 +499,19 @@ impl Vm {
                         let mut found = false;
 
                         while !current_class.is_empty() {
-                            let key = format!("{}::{}", current_class, method_name);
-                            if let Some(chunk) = self.program.methods.get(&key).cloned() {
-                                let mut new_frame = CallFrame::new(chunk, key, argc as usize + 1);
+                            let key_arity = format!("{}::{}/{}", current_class, method_name, argc);
+                            let key_bare = format!("{}::{}", current_class, method_name);
+                            let (chunk_opt, resolved_key) = if let Some(chunk) = self.program.methods.get(&key_arity).cloned() {
+                                (Some(chunk), key_arity)
+                            } else if let Some(chunk) = self.program.methods.get(&key_bare).cloned() {
+                                (Some(chunk), key_bare)
+                            } else {
+                                (None, String::new())
+                            };
+
+                            if let Some(chunk) = chunk_opt {
+                                let env_len = chunk.local_count as usize;
+                                let mut new_frame = CallFrame::new(chunk, resolved_key, (argc as usize + 1).max(env_len));
                                 new_frame.locals[0] = receiver.clone(); // slot 0 = self
                                 for (i, arg) in args.iter().enumerate() {
                                     new_frame.locals[i + 1] = arg.clone();
@@ -514,9 +531,7 @@ impl Vm {
 
                         if found {
                             // Already handled
-                        } else if class_name == "List" {
-                            // Use the `args` we already popped
-
+                        } else if class_name == "List" || class_name.starts_with("List<") {
                             let mut result = None;
                             let mut err = None;
 
@@ -531,32 +546,124 @@ impl Vm {
                                             elements.push(args[0].clone());
                                             result = Some(Value::Null);
                                         } else {
-                                            err = Some(VmError::UndefinedMethod("List::add requires 1 argument".to_string()));
+                                            err = Some(VmError::TypeError("List.add requires 1 argument".to_string()));
                                         }
                                     }
                                     "get" => {
                                         if args.len() == 1 {
                                             if let Value::Int(idx) = &args[0] {
-                                                if *idx >= 0 && (*idx as usize) < elements.len() {
-                                                    result = Some(elements[*idx as usize].clone());
+                                                let i = *idx;
+                                                if i >= 0 && (i as usize) < elements.len() {
+                                                    result = Some(elements[i as usize].clone());
                                                 } else {
-                                                    err = Some(VmError::TypeError("Index out of bounds".to_string()));
+                                                    err = Some(VmError::TypeError(format!(
+                                                        "List.get: index {} out of bounds (size={})", i, elements.len()
+                                                    )));
                                                 }
                                             } else {
-                                                err = Some(VmError::TypeError("List::get requires an integer index".to_string()));
+                                                err = Some(VmError::TypeError("List.get requires an Int index".to_string()));
                                             }
                                         } else {
-                                            err = Some(VmError::UndefinedMethod("List::get requires 1 argument".to_string()));
+                                            err = Some(VmError::TypeError("List.get requires 1 argument".to_string()));
                                         }
                                     }
                                     "size" => {
                                         if args.len() == 0 {
                                             result = Some(Value::Int(elements.len() as i64));
                                         } else {
-                                            err = Some(VmError::UndefinedMethod("List::size requires 0 arguments".to_string()));
+                                            err = Some(VmError::TypeError("List.size requires 0 arguments".to_string()));
                                         }
                                     }
-                                    _ => err = Some(VmError::UndefinedMethod(format!("{}::{}", class_name, method_name))),
+                                    "set" => {
+                                        if args.len() == 2 {
+                                            if let Value::Int(idx) = &args[0] {
+                                                let i = *idx;
+                                                if i >= 0 && (i as usize) < elements.len() {
+                                                    elements[i as usize] = args[1].clone();
+                                                    result = Some(Value::Null);
+                                                } else {
+                                                    err = Some(VmError::TypeError(format!(
+                                                        "List.set: index {} out of bounds (size={})", i, elements.len()
+                                                    )));
+                                                }
+                                            } else {
+                                                err = Some(VmError::TypeError("List.set requires an Int index".to_string()));
+                                            }
+                                        } else {
+                                            err = Some(VmError::TypeError("List.set requires 2 arguments".to_string()));
+                                        }
+                                    }
+                                    "remove" => {
+                                        if args.len() == 1 {
+                                            if let Value::Int(idx) = &args[0] {
+                                                let i = *idx;
+                                                if i >= 0 && (i as usize) < elements.len() {
+                                                    let removed = elements.remove(i as usize);
+                                                    result = Some(removed);
+                                                } else {
+                                                    err = Some(VmError::TypeError(format!(
+                                                        "List.remove: index {} out of bounds (size={})", i, elements.len()
+                                                    )));
+                                                }
+                                            } else {
+                                                err = Some(VmError::TypeError("List.remove requires an Int index".to_string()));
+                                            }
+                                        } else {
+                                            err = Some(VmError::TypeError("List.remove requires 1 argument".to_string()));
+                                        }
+                                    }
+                                    "contains" => {
+                                        if args.len() == 1 {
+                                            let target = &args[0];
+                                            let found_bool = elements.iter().any(|el| {
+                                                match (el, target) {
+                                                    (Value::Int(a), Value::Int(b))   => a == b,
+                                                    (Value::Str(a), Value::Str(b))   => a == b,
+                                                    (Value::Bool(a), Value::Bool(b)) => a == b,
+                                                    (Value::Float(a), Value::Float(b)) => a == b,
+                                                    (Value::Null, Value::Null)       => true,
+                                                    _ => false,
+                                                }
+                                            });
+                                            result = Some(Value::Bool(found_bool));
+                                        } else {
+                                            err = Some(VmError::TypeError("List.contains requires 1 argument".to_string()));
+                                        }
+                                    }
+                                    "indexOf" => {
+                                        if args.len() == 1 {
+                                            let target = &args[0];
+                                            let pos = elements.iter().position(|el| {
+                                                match (el, target) {
+                                                    (Value::Int(a), Value::Int(b))   => a == b,
+                                                    (Value::Str(a), Value::Str(b))   => a == b,
+                                                    (Value::Bool(a), Value::Bool(b)) => a == b,
+                                                    (Value::Float(a), Value::Float(b)) => a == b,
+                                                    (Value::Null, Value::Null)       => true,
+                                                    _ => false,
+                                                }
+                                            });
+                                            result = Some(Value::Int(pos.map(|p| p as i64).unwrap_or(-1)));
+                                        } else {
+                                            err = Some(VmError::TypeError("List.indexOf requires 1 argument".to_string()));
+                                        }
+                                    }
+                                    "isEmpty" => {
+                                        if args.len() == 0 {
+                                            result = Some(Value::Bool(elements.is_empty()));
+                                        } else {
+                                            err = Some(VmError::TypeError("List.isEmpty requires 0 arguments".to_string()));
+                                        }
+                                    }
+                                    "clear" => {
+                                        if args.len() == 0 {
+                                            elements.clear();
+                                            result = Some(Value::Null);
+                                        } else {
+                                            err = Some(VmError::TypeError("List.clear requires 0 arguments".to_string()));
+                                        }
+                                    }
+                                    _ => err = Some(VmError::TypeError(format!("List.{}", method_name))),
                                 }
                             }
 
@@ -567,7 +674,91 @@ impl Vm {
                                 self.push(res);
                             }
                         } else {
-                            return Err(VmError::UndefinedMethod(format!("{}::{}", class_name, method_name)));
+                            // ── Controlled Reflection ────────────────────────────────────
+                            let mut result = None;
+                            match method_name.as_str() {
+                                "getType" => {
+                                    result = Some(Value::Str(class_name.clone()));
+                                }
+                                "getMethods" => {
+                                    let list_handle = {
+                                        let mut gc = self.gc.lock().unwrap();
+                                        let list_handle = gc.allocate("List");
+                                        let obj = gc.get_mut(list_handle).unwrap();
+                                        let elements = obj.elements.as_mut().unwrap();
+
+                                        let prefix = format!("{}::", class_name);
+                                        for k in self.program.methods.keys() {
+                                            if k.starts_with(&prefix) {
+                                                let short = &k[prefix.len()..];
+                                                let name_to_add = if let Some(slash) = short.rfind('/') {
+                                                    short[..slash].to_string()
+                                                } else {
+                                                    short.to_string()
+                                                };
+                                                if !elements.contains(&Value::Str(name_to_add.clone())) {
+                                                    elements.push(Value::Str(name_to_add));
+                                                }
+                                            }
+                                        }
+                                        list_handle
+                                    };
+                                    result = Some(Value::Object(list_handle));
+                                }
+                                "getFields" => {
+                                    let list_handle = {
+                                        let mut gc = self.gc.lock().unwrap();
+                                        let list_handle = gc.allocate("List");
+                                        let obj = gc.get_mut(list_handle).unwrap();
+                                        let elements = obj.elements.as_mut().unwrap();
+
+                                        let target_obj = gc.get(*handle).unwrap();
+                                        for fkey in target_obj.fields.keys() {
+                                            elements.push(Value::Str(fkey.clone()));
+                                        }
+                                        list_handle
+                                    };
+                                    result = Some(Value::Object(list_handle));
+                                }
+                                "hasField" => {
+                                    if args.len() == 1 {
+                                        if let Value::Str(fname) = &args[0] {
+                                            let gc = self.gc.lock().unwrap();
+                                            let target_obj = gc.get(*handle).unwrap();
+                                            result = Some(Value::Bool(target_obj.fields.contains_key(fname)));
+                                        }
+                                    }
+                                }
+                                "getField" => {
+                                    if args.len() == 1 {
+                                        if let Value::Str(fname) = &args[0] {
+                                            let gc = self.gc.lock().unwrap();
+                                            let target_obj = gc.get(*handle).unwrap();
+                                            let val = target_obj.fields.get(fname).cloned().unwrap_or(Value::Null);
+                                            result = Some(val);
+                                        }
+                                    }
+                                }
+                                "implementsInterface" => {
+                                    if args.len() == 1 {
+                                        if let Value::Str(iname) = &args[0] {
+                                            let has_interface = if let Some(interfaces) = self.program.interfaces.get(&class_name) {
+                                                interfaces.contains(iname)
+                                            } else {
+                                                false
+                                            };
+                                            result = Some(Value::Bool(has_interface));
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+
+                            if let Some(res) = result {
+                                self.push(res);
+                            } else {
+                                return Err(VmError::UndefinedMethod(format!("{}::{}", class_name, method_name)));
+                            }
                         }
                     } else {
                         return Err(VmError::NullDereference(format!("Attempted to invoke virtual method '{}' on {:?}", method_name, receiver)));
@@ -656,7 +847,6 @@ impl Vm {
                         .cloned()
                         .unwrap_or_default();
 
-                    let ctor_key = format!("{}::{}", class_name, class_name);
                     let mut args = Vec::new();
                     for _ in 0..argc {
                         args.push(self.pop()?);
@@ -667,8 +857,19 @@ impl Vm {
                     let obj_val = Value::Object(handle);
                     self.push(obj_val.clone()); // Push to stack now so it's there after constructor returns
 
-                    if let Some(chunk) = self.program.methods.get(&ctor_key).cloned() {
-                        let mut ctor_frame = CallFrame::new(chunk, ctor_key, argc as usize + 1);
+                    let ctor_key_arity = format!("{}::{}/{}", class_name, class_name, argc);
+                    let ctor_key_bare = format!("{}::{}", class_name, class_name);
+                    let (chunk_opt, resolved_key) = if let Some(chunk) = self.program.methods.get(&ctor_key_arity).cloned() {
+                        (Some(chunk), ctor_key_arity)
+                    } else if let Some(chunk) = self.program.methods.get(&ctor_key_bare).cloned() {
+                        (Some(chunk), ctor_key_bare)
+                    } else {
+                        (None, String::new())
+                    };
+
+                    if let Some(chunk) = chunk_opt {
+                        let env_len = chunk.local_count as usize;
+                        let mut ctor_frame = CallFrame::new(chunk, resolved_key, (argc as usize + 1).max(env_len));
                         ctor_frame.locals[0] = obj_val;
                         // Map args into local slots (1-indexed for explicit args)
                         for (i, arg) in args.into_iter().enumerate() {

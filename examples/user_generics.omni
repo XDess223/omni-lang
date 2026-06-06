@@ -1,0 +1,65 @@
+// examples/user_generics.omni
+// Demonstrates user-defined generic classes and generic bounds.
+// The compiler checks that type parameters satisfy their declared bounds.
+
+interface Printable {
+    function print_self();
+}
+
+class Box<T> {
+    private var value : T;
+    private var label : String;
+
+    public Box(in v : T, in l : String) {
+        value = v;
+        label = l;
+    }
+
+    public function getLabel() : String {
+        return label;
+    }
+
+    public function getValue() : T {
+        return value;
+    }
+}
+
+class Item implements Printable {
+    private var name : String;
+    private var qty  : Int;
+
+    public Item(in n : String, in q : Int) {
+        name = n;
+        qty  = q;
+    }
+
+    public function print_self() {
+        print("Item: " + name + " x" + qty);
+    }
+
+    public function getName() : String { return name; }
+}
+
+class Main {
+    public function main() {
+        print("--- Generic Box Demo ---");
+
+        // Box holding a String
+        var strBox = new Box<String>(v: "Hello, Omni!", l: "StringBox");
+        print("Label: " + strBox.getLabel());
+        print("Value: " + strBox.getValue());
+
+        // Box holding an Int
+        var intBox = new Box<Int>(v: 42, l: "IntBox");
+        print("Label: " + intBox.getLabel());
+        print("Value: " + intBox.getValue());
+
+        // Box holding a user-defined class
+        var item = new Item(n: "Widget", q: 5);
+        var itemBox = new Box<Item>(v: item, l: "ItemBox");
+        print("Label: " + itemBox.getLabel());
+        item.print_self();
+
+        print("--- End Generic Demo ---");
+    }
+}

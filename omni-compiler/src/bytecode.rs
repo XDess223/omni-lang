@@ -194,10 +194,14 @@ impl Chunk {
 /// The full compiled output of one Omni source file.
 #[derive(Debug, Clone, Default)]
 pub struct CompiledProgram {
-    /// One chunk per method (keyed as "ClassName::method_name").
+    /// One chunk per method (keyed as "ClassName::method_name/N" where N = arity).
+    /// Constructors use "ClassName::ClassName/N".
+    /// For the main entry point: "Main::main/0" or "Main::main" (fallback).
     pub methods: std::collections::HashMap<String, Chunk>,
     /// Inheritance map: child class -> parent class.
     pub inheritance: std::collections::HashMap<String, String>,
+    /// Interface implementation map: class name -> list of interface names implemented.
+    pub interfaces: std::collections::HashMap<String, Vec<String>>,
     /// A special top-level chunk for static initializers / main entry.
     pub main_chunk: Chunk,
 }

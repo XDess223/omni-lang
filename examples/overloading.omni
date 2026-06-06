@@ -1,0 +1,46 @@
+// examples/overloading.omni
+// Demonstrates method overloading: two methods with the same name
+// but different parameter counts are resolved correctly.
+
+class Calculator {
+    private var history : String;
+
+    public Calculator() {
+        history = "Calculator ready";
+    }
+
+    // Overload 1: add(a, b)
+    public function add(in a : Int, in b : Int) : Int {
+        return a + b;
+    }
+
+    // Overload 2: add(a, b, c) - three argument version
+    public function add(in a : Int, in b : Int, in c : Int) : Int {
+        return a + b + c;
+    }
+
+    // Overload 3: describe() - zero args
+    public function describe() : String {
+        return history;
+    }
+
+    // Overload 4: describe(label) - one arg
+    public function describe(in label : String) : String {
+        return label + ": " + history;
+    }
+}
+
+class Main {
+    public function main() {
+        var calc = new Calculator();
+
+        var sum2 = calc.add(10, 20);
+        print("add(10, 20) = " + sum2);
+
+        var sum3 = calc.add(10, 20, 30);
+        print("add(10, 20, 30) = " + sum3);
+
+        print(calc.describe());
+        print(calc.describe("Status"));
+    }
+}

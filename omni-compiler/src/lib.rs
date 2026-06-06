@@ -113,7 +113,7 @@ pub fn compile(source: &str) -> Result<ast::Program, String> {
     analyzer.analyze(&program);
     if !analyzer.errors.is_empty() {
         let msgs: Vec<String> = analyzer.errors.iter()
-            .map(|e| format!("{:?}", e))
+            .map(|e| format!("{}", e))  // Use Display for human-readable messages
             .collect();
         return Err(format!("Semantic errors:\n{}", msgs.join("\n")));
     }

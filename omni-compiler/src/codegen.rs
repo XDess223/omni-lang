@@ -60,6 +60,11 @@ pub struct CodeGen {
     current_class: String,
     current_parent: Option<String>,
     forall_counter: u32,
+    /// Namespace prefix from the source file (if any), used to qualify class names.
+    current_namespace: Option<String>,
+    /// Maps method name -> ordered list of parameter names (for keyword arg reordering).
+    /// Key: "ClassName::method_name/N"
+    method_params: std::collections::HashMap<String, Vec<String>>,
 }
 
 impl CodeGen {
@@ -69,15 +74,34 @@ impl CodeGen {
             current_class: String::new(),
             current_parent: None,
             forall_counter: 0,
+            current_namespace: None,
+            method_params: std::collections::HashMap::new(),
         }
     }
 
     // ── Entry point ───────────────────────────────────────────────────────
 
     pub fn generate(&mut self, program: &Program) {
+        // Store namespace for class name qualification
+        self.current_namespace = program.namespace.clone();
         for class in &program.classes {
             self.gen_class(class);
         }
+    }
+
+    /// Build the fully-qualified class name (with namespace if set and name not already qualified).
+    fn qualify(&self, name: &str) -> String {
+        if let Some(ref ns) = self.current_namespace {
+            if !name.contains("::") {
+                return format!("{}::{}", ns, name);
+            }
+        }
+        name.to_string()
+    }
+
+    /// Build the method key: "ClassName::method_name/N" where N = param count.
+    fn method_key(&self, class_name: &str, method_name: &str, arity: usize) -> String {
+        format!("{}::{}/{}", class_name, method_name, arity)
     }
 
     // ── Class ─────────────────────────────────────────────────────────────
@@ -89,6 +113,13 @@ impl CodeGen {
             self.output
                 .inheritance
                 .insert(class.name.clone(), parent.clone());
+        }
+
+        // Register interface implementations for reflection
+        if !class.implements.is_empty() {
+            self.output
+                .interfaces
+                .insert(class.name.clone(), class.implements.clone());
         }
 
         // Collect all field initializers to prepend them to constructors
@@ -111,11 +142,22 @@ impl CodeGen {
             }
         }
 
-        // Generate methods
+        // Generate methods — key includes arity suffix for overload resolution.
+        // Also pre-register param names for keyword arg reordering.
         for member in &class.members {
             if let ClassMember::Method(_, method) = member {
                 let is_constructor = method.name == class.name;
-                let key = format!("{}::{}", class.name, method.name);
+                let arity = method.params.len();
+                let key = self.method_key(&class.name, &method.name, arity);
+
+                // Store param names for keyword argument reordering
+                let param_names: Vec<String> = method.params.iter()
+                    .map(|p| p.name.clone())
+                    .collect();
+                self.method_params.insert(key.clone(), param_names.clone());
+                let short_key = format!("{}/{}", method.name, arity);
+                self.method_params.insert(short_key, param_names);
+
                 let chunk =
                     self.gen_method(method, if is_constructor { &field_inits } else { &[] });
                 self.output.methods.insert(key, chunk);
@@ -129,9 +171,9 @@ impl CodeGen {
                 params: Vec::new(),
                 throws: Vec::new(),
                 return_type: None,
-                body: Vec::new(), // Empty body, but gen_method will add field inits
+                body: Vec::new(),
             };
-            let key = format!("{}::{}", class.name, class.name);
+            let key = self.method_key(&class.name, &class.name, 0);
             let chunk = self.gen_method(&default_constructor, &field_inits);
             self.output.methods.insert(key, chunk);
         }
@@ -391,17 +433,6 @@ impl CodeGen {
                 chunk.emit(Instruction::ExecuteForall, 0);
             }
 
-            // monitor (target) { body }
-            // Emitted sequence:
-            //   [eval target]         StoreLocal(lock_slot)
-            //   LoadLocal(lock_slot)  MonitorEnter
-            //   TryBeginFinally { handler_ip: ?? }   ← patched to finally block
-            //   [body]
-            //   TryEnd { past_ip: ?? }               ← normal exit; patched to after finally
-            // --- finally block (handler_ip) ---
-            //   LoadLocal(lock_slot)  MonitorExit
-            //   EndFinally                           ← resumes return or re-throws
-            // --- end (past_ip) ---
             Stmt::Monitor { target, body } => {
                 // 1. Evaluate target and save it
                 self.gen_expr(target, chunk, locals);
@@ -418,18 +449,22 @@ impl CodeGen {
                 // 4. Body
                 self.gen_block(body, chunk, locals);
 
-                // 5. Normal-path exit marker — jumps past the finally block
+                // 5. Release the lock on the normal path
+                chunk.emit(Instruction::LoadLocal(lock_slot), 0);
+                chunk.emit(Instruction::MonitorExit, 0);
+
+                // 6. Normal-path exit marker — jumps past the exception finally block
                 let try_end_idx = chunk.emit(Instruction::TryEnd { past_ip: 0 }, 0);
 
-                // 6. Patch TryBeginFinally → here (start of finally block)
+                // 7. Patch TryBeginFinally → here (start of exception finally block)
                 chunk.patch_jump(try_begin_idx);
 
-                // 7. Finally block: always release the lock, then resume
+                // 8. Exception Finally block: always release the lock, then resume
                 chunk.emit(Instruction::LoadLocal(lock_slot), 0);
                 chunk.emit(Instruction::MonitorExit, 0);
                 chunk.emit(Instruction::EndFinally, 0);
 
-                // 8. Patch TryEnd → here (after the finally block)
+                // 9. Patch TryEnd → here (after the finally block)
                 chunk.patch_jump(try_end_idx);
             }
 
@@ -638,10 +673,10 @@ impl CodeGen {
                             self.gen_expr(&arg.value, chunk, locals);
                         }
 
-                        let constructor_key = format!("{}::{}", parent, parent);
+                        let arity = args.len();
+                        let constructor_key = format!("{}::{}/{}", parent, parent, arity);
                         let nidx = chunk.intern_name(&constructor_key);
                         let argc = args.len() as u8 + 1;
-                        // We use Call here because parent constructor is a static-like lookup
                         chunk.emit(
                             Instruction::Call {
                                 name_idx: nidx,
@@ -661,7 +696,12 @@ impl CodeGen {
                             chunk.emit(Instruction::GetType, 0);
                         } else {
                             self.gen_expr(object, chunk, locals);
-                            for arg in args {
+                            // Keyword argument reordering for virtual calls:
+                            // Build the method key to look up param order.
+                            let obj_class = self.resolve_object_class(object, locals);
+                            let method_key = format!("{}::{}/{}", obj_class, field, args.len());
+                            let ordered_args = self.reorder_args(args, &method_key);
+                            for arg in &ordered_args {
                                 self.gen_expr(&arg.value, chunk, locals);
                             }
                             let nidx = chunk.intern_name(field);
@@ -679,19 +719,20 @@ impl CodeGen {
                         match callee.as_ref() {
                             Expr::Ident(name) => {
                                 if let Some(slot) = locals.lookup(name) {
-                                    // Pushes the closure from the local slot
+                                    // Closure call from local slot
                                     chunk.emit(Instruction::LoadLocal(slot), 0);
                                     for arg in args {
                                         self.gen_expr(&arg.value, chunk, locals);
                                     }
                                     chunk.emit(Instruction::CallClosure { argc }, 0);
                                 } else {
-                                    // Named call (Builtin or other global function)
-                                    // We do NOT call gen_expr(callee) here to avoid the implicit 'this.field' lookup
-                                    for arg in args {
+                                    // Named call — use arity-suffixed key for overload resolution
+                                    let method_key = format!("{}/{}", name, args.len());
+                                    let ordered_args = self.reorder_args(args, &method_key);
+                                    for arg in &ordered_args {
                                         self.gen_expr(&arg.value, chunk, locals);
                                     }
-                                    let nidx = chunk.intern_name(name);
+                                    let nidx = chunk.intern_name(&method_key);
                                     chunk.emit(
                                         Instruction::Call {
                                             name_idx: nidx,
@@ -756,7 +797,10 @@ impl CodeGen {
                 type_args: _,
                 args,
             } => {
-                for arg in args {
+                // Keyword argument reordering for constructors
+                let constructor_key = self.method_key(class_name, class_name, args.len());
+                let ordered_args = self.reorder_args(args, &constructor_key);
+                for arg in &ordered_args {
                     self.gen_expr(&arg.value, chunk, locals);
                 }
                 let class_idx = chunk.intern_name(class_name);
@@ -799,7 +843,6 @@ impl CodeGen {
 
             Expr::Closure { params, body } => {
                 // Closures are compiled as anonymous methods named by a unique key.
-                // They are stored in the output and referenced by a PushString of their key.
                 let closure_key = format!(
                     "{}::__closure_{}__",
                     self.current_class,
@@ -835,6 +878,78 @@ impl CodeGen {
                     0,
                 );
             }
+        }
+    }
+
+    // ── Keyword argument reordering ────────────────────────────────────────
+
+    /// Given a list of `Arg` values (some possibly named), and the method key,
+    /// return them reordered to match the declared parameter positions.
+    /// Positional args are left in place; named args are sorted by param order.
+    fn reorder_args<'a>(&self, args: &'a [Arg], method_key: &str) -> Vec<&'a Arg> {
+        let has_named = args.iter().any(|a| a.name.is_some());
+        if !has_named {
+            return args.iter().collect();
+        }
+
+        let mut param_names_opt = self.method_params.get(method_key);
+        if param_names_opt.is_none() {
+            if let Some(slash_idx) = method_key.rfind('/') {
+                let name_part = &method_key[..slash_idx];
+                let arity_part = &method_key[slash_idx..];
+                if let Some(colon_idx) = name_part.rfind("::") {
+                    let short_key = format!("{}{}", &name_part[colon_idx + 2..], arity_part);
+                    param_names_opt = self.method_params.get(&short_key);
+                }
+            }
+        }
+
+        if let Some(param_names) = param_names_opt {
+            let mut ordered: Vec<Option<&Arg>> = vec![None; param_names.len()];
+            let mut positional: Vec<&Arg> = Vec::new();
+
+            for arg in args {
+                match &arg.name {
+                    Some(kw) => {
+                        if let Some(pos) = param_names.iter().position(|p| p == kw) {
+                            ordered[pos] = Some(arg);
+                        }
+                    }
+                    None => positional.push(arg),
+                }
+            }
+
+            // Fill in positional args for any slots not yet filled by keyword args
+            let mut pos_iter = positional.into_iter();
+            for slot in ordered.iter_mut() {
+                if slot.is_none() {
+                    *slot = pos_iter.next();
+                }
+            }
+
+            ordered.into_iter().flatten().collect()
+        } else {
+            // No param name info — fall back to original order
+            args.iter().collect()
+        }
+    }
+
+    /// Attempt to resolve the static class name of an expression,
+    /// used to build the method key for keyword arg lookup.
+    fn resolve_object_class(&self, expr: &Expr, _locals: &Locals) -> String {
+        match expr {
+            Expr::Ident(name) => {
+                // Check if this is "this"
+                if name == "this" {
+                    return self.current_class.clone();
+                }
+                // We can't reliably resolve class names at codegen time without
+                // full type propagation, so return empty string as fallback.
+                String::new()
+            }
+            Expr::New { class_name, .. } => class_name.clone(),
+            Expr::This => self.current_class.clone(),
+            _ => String::new(),
         }
     }
 }

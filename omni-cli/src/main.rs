@@ -101,13 +101,24 @@ fn cmd_check(args: &[String]) {
 }
 
 fn find_entry(compiled: &omni_compiler::bytecode::CompiledProgram) -> Option<String> {
-    if compiled.methods.contains_key("Main::main") {
-        Some("Main::main".to_string())
-    } else if let Some(k) = compiled.methods.keys().find(|k| k.ends_with("::main")) {
-        Some(k.clone())
-    } else {
-        compiled.methods.keys().next().cloned()
+    // Try arity-suffixed "Main::main/0" first (new format)
+    if compiled.methods.contains_key("Main::main/0") {
+        return Some("Main::main/0".to_string());
     }
+    // Fall back to bare "Main::main" (for backward compatibility)
+    if compiled.methods.contains_key("Main::main") {
+        return Some("Main::main".to_string());
+    }
+    // Try any method ending with ::main/0 (namespace-qualified main)
+    if let Some(k) = compiled.methods.keys().find(|k| k.ends_with("::main/0")) {
+        return Some(k.clone());
+    }
+    // Try any method ending with ::main (older format)
+    if let Some(k) = compiled.methods.keys().find(|k| k.ends_with("::main")) {
+        return Some(k.clone());
+    }
+    // Fallback: first method in the map
+    compiled.methods.keys().next().cloned()
 }
 
 fn read_source(path: &str) -> String {

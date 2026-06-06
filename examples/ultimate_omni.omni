@@ -68,6 +68,7 @@ class LogicEngine<T> extends Base implements ITask {
     }
 
     public function runParallel(data : List<T>) {
+        print("data size inside runParallel:", data.size());
         this.log("Starting high-performance parallel segment...");
         
         // FORALL: Statement-level parallelism

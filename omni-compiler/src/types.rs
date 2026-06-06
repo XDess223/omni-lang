@@ -34,6 +34,13 @@ pub enum OmniType {
     // ── Array type ───────────────────────────────────────────────────
     Array { element_type: Box<OmniType>, dimensions: usize },
 
+    // ── Generic type parameter: e.g. T in class Stack<T extends Comparable> ──
+    TypeParam {
+        name: String,
+        /// The declared upper bound (interface or class name), if any.
+        bound: Option<String>,
+    },
+
     /// Placeholder used before type inference resolves a declaration.
     Inferred,
 }
@@ -50,6 +57,10 @@ impl fmt::Display for OmniType {
             OmniType::Class(name)   => write!(f, "{}", name),
             OmniType::Interface(name)=> write!(f, "{}", name),
             OmniType::Inferred      => write!(f, "<inferred>"),
+            OmniType::TypeParam { name, bound } => match bound {
+                Some(b) => write!(f, "{} extends {}", name, b),
+                None    => write!(f, "{}", name),
+            },
             OmniType::Generic { base, params } => {
                 write!(f, "{}<", base)?;
                 for (i, p) in params.iter().enumerate() {
@@ -100,9 +111,19 @@ impl OmniType {
         if self == other {
             return true;
         }
+        // Inferred is compatible with anything (unknown type — let it through)
+        if matches!(self, OmniType::Inferred) || matches!(other, OmniType::Inferred) {
+            return true;
+        }
+        // TypeParam is compatible with anything (erased at runtime)
+        if matches!(self, OmniType::TypeParam { .. }) || matches!(other, OmniType::TypeParam { .. }) {
+            return true;
+        }
         // Allow assigning T into Optional<T>
         if let OmniType::Optional(inner) = self {
             if inner.as_ref() == other { return true; }
+            // Also allow None/null directly into Optional
+            if matches!(other, OmniType::Optional(_)) { return true; }
         }
         // Allow Function inferred return assignment
         if let (OmniType::Function { param_types: p1, return_type: r1 },

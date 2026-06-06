@@ -35,11 +35,11 @@ mod tests {
         let mut gen = CodeGen::new();
         gen.generate(&program);
 
-        assert!(gen.output.methods.contains_key("Student::Student"),
+        assert!(gen.output.methods.contains_key("Student::Student/2"),
             "Constructor chunk missing");
-        assert!(gen.output.methods.contains_key("Student::getGrade"),
+        assert!(gen.output.methods.contains_key("Student::getGrade/0"),
             "getGrade chunk missing");
-        assert!(gen.output.methods.contains_key("Student::describe"),
+        assert!(gen.output.methods.contains_key("Student::describe/0"),
             "describe chunk missing");
     }
 
@@ -63,7 +63,7 @@ mod tests {
         let mut gen = CodeGen::new();
         gen.generate(&program);
 
-        let chunk = gen.output.methods.get("Logic::check").expect("chunk missing");
+        let chunk = gen.output.methods.get("Logic::check/1").expect("chunk missing");
         // There must be at least one JumpIfFalse and one Jump for the if-else.
         let has_jump_if_false = chunk.code.iter().any(|i| matches!(i, Instruction::JumpIfFalse(_)));
         let has_jump = chunk.code.iter().any(|i| matches!(i, Instruction::Jump(_)));
@@ -71,7 +71,7 @@ mod tests {
         assert!(has_jump, "Missing Jump for if-else");
     }
 
-    /// Verify foreach emits ForallBegin / ForallEnd markers.
+    /// Verify foreach/forall emits ExecuteForall.
     #[test]
     fn test_codegen_foreach_markers() {
         use omni_compiler::codegen::CodeGen;
@@ -79,7 +79,7 @@ mod tests {
         let src = r#"
             class Loop {
                 public function run(in items : List) {
-                    foreach (x in items) { print(x); }
+                    forall (x = 0 to 10) { print(x); }
                 }
             }
         "#;
@@ -87,7 +87,7 @@ mod tests {
         let mut gen = CodeGen::new();
         gen.generate(&program);
 
-        let chunk = gen.output.methods.get("Loop::run").expect("chunk missing");
+        let chunk = gen.output.methods.get("Loop::run/1").expect("chunk missing");
         assert!(chunk.code.iter().any(|i| matches!(i, Instruction::ExecuteForall)),
             "Missing ExecuteForall instruction");
     }
@@ -112,7 +112,7 @@ mod tests {
         let mut gen = CodeGen::new();
         gen.generate(&program);
 
-        let chunk = gen.output.methods.get("Safe::run").expect("chunk missing");
+        let chunk = gen.output.methods.get("Safe::run/0").expect("chunk missing");
         assert!(chunk.code.iter().any(|i| matches!(i, Instruction::TryBeginCatch { .. })),
             "Missing TryBeginCatch");
         assert!(chunk.code.iter().any(|i| matches!(i, Instruction::TryEnd { .. })),

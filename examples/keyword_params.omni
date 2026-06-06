@@ -1,0 +1,38 @@
+// examples/keyword_params.omni
+// Demonstrates keyword (named) parameters: arguments can be passed by name
+// in any order, and the compiler reorders them to match declared positions.
+
+class Server {
+    private var host : String;
+    private var port : Int;
+    private var timeout : Int;
+
+    public Server(in host : String, in port : Int, in timeout : Int) {
+        this.host = host;
+        this.port = port;
+        this.timeout = timeout;
+    }
+
+    public function connect() {
+        print("Connecting to " + this.host + ":" + this.port + " (timeout=" + this.timeout + "ms)");
+    }
+
+    public function send(in message : String, in retries : Int) {
+        print("Sending '" + message + "' with " + retries + " retries");
+    }
+}
+
+class Main {
+    public function main() {
+        // All three keyword args — in any order
+        var s1 = new Server(port: 8080, timeout: 5000, host: "localhost");
+        s1.connect();
+
+        // Mix of positional and keyword
+        var s2 = new Server(host: "example.com", port: 443, timeout: 3000);
+        s2.connect();
+
+        // Keyword args on method call
+        s1.send(retries: 3, message: "Hello, Omni!");
+    }
+}
