@@ -43,8 +43,8 @@ o	Null Safety (Optional Types): To prevent null reference errors, Omni incorpora
 •	Encapsulation: Omni strictly uses Abstract Data Types (ADTs) via classes, keeping data members private by default. Clients cannot accidentally corrupt an object's state.
 o	Class & Encapsulation Example:
 class Person {
-    private var name : String
-    private var age : Int
+    private var name : String;
+    private var age : Int;
     // Constructor
     public Person(in n : String, in a : Int) {
         name = n;
@@ -108,7 +108,7 @@ Omni implements a structured try-catch-finally system. It features "checked exce
 •	Monitors: Omni avoids dangerously low-level semaphores that can easily cause deadlocks. Instead, it uses Monitors (protected objects) to automatically manage and synchronize access to encapsulated shared data.
 •	Statement-Level Concurrency: Omni utilizes statement-level concurrency via FORALL loops, wherein the compiler guarantees safe parallel execution by evaluating all right-hand expressions before performing any assignments, cleanly mapping data processing to multiprocessor hardware without race conditions.
 o	Statement-Level Concurrency Example:
-FORALL (i in numbers) {
+forall (i = 0 to 9) {
     squares[i] = numbers[i] * numbers[i];
 }
  
