@@ -151,20 +151,18 @@ class Synchronization {
 
 ---
 
-> [!CAUTION]
-> ### State of the Prototype vs. Full Specification
-> Omni is currently in a **Prototype Phase**. Many features defined in the [Whitepaper](file:///c:/Users/verse/Desktop/CSC454/omni-lang/OmniProgrammingLanguageWhitepaper.md) are not yet implemented in the current toolchain.
+> ### Feature Support Matrix
 >
-> | Feature | Target Specification (Whitepaper) | Current Prototype Status |
+> | Feature | Target Specification (Whitepaper) | Implementation Status |
 > | :--- | :--- | :--- |
-> | **Generics** | Full Parametric Polymorphism | **Built-in `List<T>` only**. |
-> | **Namespaces** | Logic grouping & `import` system | **Not Implemented**. |
-> | **Method Overloading** | Signature-based dispatch | **Name-only** (Resolved by name only). |
-> | **Closures** | First-class functions & Closures | **Methods only** (No anonymous functions). |
-> | **Reflection** | Managed & Secure Reflection | **Not Implemented**. |
-> | **Parameters** | Keyword & Positional matching | **Positional only**. |
+> | **Generics** | Full Parametric Polymorphism | **Fully Supported** (User-defined generics and bounds checking). |
+> | **Namespaces** | Logical grouping & `import` system | **Fully Supported** (Explicit namespaces and logical imports). |
+> | **Method Overloading** | Signature-based dispatch | **Fully Supported** (Overload resolution by parameter count/arity). |
+> | **Closures** | First-class functions & Closures | **Fully Supported** (Anonymous functions and lexical upvalue capture). |
+> | **Reflection** | Managed & Secure Reflection | **Fully Supported** (Introspection API: getType, getMethods, getFields, etc.). |
+> | **Parameters** | Keyword & Positional matching | **Fully Supported** (Keyword parameters matching and reordering). |
 > | **Semicolons** | Standard statement termination | **Mandatory** for all fields/statements. |
-> | **Inheritance** | Single Inheritance + Interfaces | **Experimental** (Basic support only). |
+> | **Inheritance** | Single Inheritance + Interfaces | **Fully Supported** (Dynamic dispatch, interface validation). |
 >
 > **Prototype Implementation Rules:**
 > - **Strict Nominal Typing**: Two classes with identical fields are NOT interchangeable; they must be the exact same named type.
@@ -183,7 +181,6 @@ To get syntax highlighting and Omni-aware features in VS Code:
 - Use `in` parameters for read-only views. Note that `in` parameters may prevent calling methods that modify (or are perceived to modify) the object, such as `List.add()`.
 - **`in` Mode Propagation**: If you pass an `in` parameter as an argument to another method, that receiving method must also declare the parameter as `in`.
 - **Built-in Collections**: `List<T>` is built-in to the compiler and VM. You do **not** need to import `stdlib.omni` to use it.
-- **VM Best Practice**: In the current prototype, avoid nesting `new` calls directly inside method arguments (e.g., `list.add(new Student(...))`). Instead, instantiate objects as separate variables before passing them.
 - Checked exceptions must be declared in method signatures: `function run() throws MyException`.
 - String concatenation works naturally with `+`.
 
