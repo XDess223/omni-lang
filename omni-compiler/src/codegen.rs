@@ -90,6 +90,7 @@ impl CodeGen {
     }
 
     /// Build the fully-qualified class name (with namespace if set and name not already qualified).
+    #[allow(dead_code)]
     fn qualify(&self, name: &str) -> String {
         if let Some(ref ns) = self.current_namespace {
             if !name.contains("::") {

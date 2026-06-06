@@ -185,6 +185,7 @@ impl Analyzer {
     }
 
     /// Qualify a name with the current namespace prefix if it doesn't already contain one.
+    #[allow(dead_code)]
     fn qualify(&self, name: &str) -> String {
         if let Some(ref ns) = self.current_namespace {
             if !name.contains("::") {
