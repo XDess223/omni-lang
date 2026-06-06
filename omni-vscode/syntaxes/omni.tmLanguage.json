@@ -32,7 +32,7 @@
             "patterns": [
                 {
                     "name": "keyword.control.omni",
-                    "match": "\\b(if|else|foreach|forall|monitor|try|catch|finally|throw|return|switch|case|default|import|namespace|throws|this|super)\\b"
+                    "match": "\\b(if|else|foreach|forall|to|monitor|try|catch|finally|throw|return|switch|case|default|import|namespace|throws|this|super)\\b"
                 },
                 {
                     "name": "keyword.other.omni",
@@ -40,11 +40,11 @@
                 },
                 {
                     "name": "keyword.operator.omni",
-                    "match": "(=>|==|!=|<=|>=|\\+|-|\\*|/|%|=|&&|\\|\\||!|<|>)"
+                    "match": "(::|=>|->|==|!=|<=|>=|\\+|-|\\*|/|%|=|&&|\\|\\||!|<|>)"
                 },
                 {
                     "name": "support.function.omni",
-                    "match": "\\b(print|size|add|get|log)\\b"
+                    "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\s*(?=\\()"
                 }
             ]
         },
@@ -79,7 +79,7 @@
                 },
                 {
                     "name": "storage.type.primitive.omni",
-                    "match": "\\b(Int|Float|String|Bool|List|Exception)\\b"
+                    "match": "\\b(Int|Float|String|Bool|List|Exception|Void)\\b"
                 }
             ]
         }
