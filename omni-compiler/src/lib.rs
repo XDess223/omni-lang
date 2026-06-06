@@ -50,6 +50,30 @@ pub fn compile(source: &str) -> Result<ast::Program, String> {
                             }
                         }
                     }
+                    
+                    // Check if it's a namespace import: import Namespace::Path;
+                    let mut next = i + 1;
+                    let mut is_namespace_import = false;
+                    while next < tokens.len() {
+                        match &tokens[next].token {
+                            token::Token::Ident(_) | token::Token::ClassIdent(_) | token::Token::DoubleColon => {
+                                next += 1;
+                            }
+                            token::Token::Semicolon => {
+                                is_namespace_import = true;
+                                break;
+                            }
+                            _ => break,
+                        }
+                    }
+                    if is_namespace_import {
+                        for k in i..=next {
+                            remaining_tokens.push(tokens[k].clone());
+                        }
+                        i = next + 1;
+                        continue;
+                    }
+
                     return Err("Invalid import syntax. Expected: import \"filename.omni\";".to_string());
                 }
                 token::Token::Namespace => {

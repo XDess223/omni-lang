@@ -71,6 +71,21 @@ pub enum VmError {
     NullDereference(String),
 }
 
+impl std::fmt::Display for VmError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            VmError::StackUnderflow => write!(f, "Stack underflow"),
+            VmError::UndefinedMethod(name) => write!(f, "Undefined method: {}", name),
+            VmError::UndefinedField(name) => write!(f, "Undefined field: {}", name),
+            VmError::InvalidHandle(h) => write!(f, "Invalid heap handle: {}", h),
+            VmError::CheckedExceptionUnhandled(msg) => write!(f, "Unhandled checked exception: {}", msg),
+            VmError::TypeError(msg) => write!(f, "Type error: {}", msg),
+            VmError::DivisionByZero => write!(f, "Division by zero"),
+            VmError::NullDereference(msg) => write!(f, "Null dereference: {}", msg),
+        }
+    }
+}
+
 // ── Virtual Machine ───────────────────────────────────────────────────────────
 
 pub struct Vm {
@@ -707,14 +722,18 @@ impl Vm {
                                 }
                                 "getFields" => {
                                     let list_handle = {
+                                        let fkeys: Vec<String> = {
+                                            let gc = self.gc.lock().unwrap();
+                                            let target_obj = gc.get(*handle).unwrap();
+                                            target_obj.fields.keys().cloned().collect()
+                                        };
+
                                         let mut gc = self.gc.lock().unwrap();
                                         let list_handle = gc.allocate("List");
                                         let obj = gc.get_mut(list_handle).unwrap();
                                         let elements = obj.elements.as_mut().unwrap();
-
-                                        let target_obj = gc.get(*handle).unwrap();
-                                        for fkey in target_obj.fields.keys() {
-                                            elements.push(Value::Str(fkey.clone()));
+                                        for fkey in fkeys {
+                                            elements.push(Value::Str(fkey));
                                         }
                                         list_handle
                                     };
@@ -855,7 +874,6 @@ impl Vm {
 
                     let handle = self.gc.lock().unwrap().allocate(&class_name);
                     let obj_val = Value::Object(handle);
-                    self.push(obj_val.clone()); // Push to stack now so it's there after constructor returns
 
                     let ctor_key_arity = format!("{}::{}/{}", class_name, class_name, argc);
                     let ctor_key_bare = format!("{}::{}", class_name, class_name);
@@ -876,6 +894,8 @@ impl Vm {
                             ctor_frame.locals[i + 1] = arg;
                         }
                         self.frames.push(ctor_frame);
+                    } else {
+                        self.push(obj_val);
                     }
                 }
 

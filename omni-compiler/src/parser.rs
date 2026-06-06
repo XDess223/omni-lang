@@ -917,23 +917,22 @@ impl Parser {
     /// Accept any token that can name a type: built-in keywords OR class names.
     fn expect_type_name(&mut self) -> Result<String, ParseError> {
         let st = self.current().clone();
-        let name = match &st.token {
-            Token::TypeInt    => "Int".to_string(),
-            Token::TypeFloat  => "Float".to_string(),
-            Token::TypeString => "String".to_string(),
-            Token::TypeBool   => "Bool".to_string(),
-            Token::Method     => "method".to_string(),
-            Token::ClassIdent(n) => n.clone(),
-            Token::Ident(n)      => n.clone(),
-            _ => return Err(ParseError::UnexpectedToken {
+        match &st.token {
+            Token::TypeInt    => { self.advance(); Ok("Int".to_string()) }
+            Token::TypeFloat  => { self.advance(); Ok("Float".to_string()) }
+            Token::TypeString => { self.advance(); Ok("String".to_string()) }
+            Token::TypeBool   => { self.advance(); Ok("Bool".to_string()) }
+            Token::Method     => { self.advance(); Ok("method".to_string()) }
+            Token::ClassIdent(_) | Token::Ident(_) => {
+                self.expect_ident()
+            }
+            _ => Err(ParseError::UnexpectedToken {
                 expected: "type name",
                 found: st.token.clone(),
                 line: st.span.line,
                 col: st.span.col,
             }),
-        };
-        self.advance();
-        Ok(name)
+        }
     }
 
     fn parse_type_expr(&mut self) -> Result<TypeExpr, ParseError> {

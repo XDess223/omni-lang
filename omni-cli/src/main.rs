@@ -69,7 +69,7 @@ fn cmd_run(args: &[String]) {
                     }
                 }
                 Err(e) => {
-                    eprintln!("\n\x1b[1;31m❌ Runtime Error: {:?}\x1b[0m", e);
+                    eprintln!("\n\x1b[1;31m❌ Runtime Error: {}\x1b[0m", e);
                     process::exit(1);
                 }
             }

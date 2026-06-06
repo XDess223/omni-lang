@@ -18,7 +18,7 @@ use std::sync::atomic::AtomicI32;
 // ── Heap Value ────────────────────────────────────────────────────────────────
 
 /// The runtime value of any Omni object slot.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Int(i64),
     Float(f64),
